@@ -1,36 +1,92 @@
-import logging
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.lines import Line2D
 
-import napari
 
-logger = logging.getLogger(__name__)
+def plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_membrane, slice_index=None):
+    """
+    Plots a comparison of predicted vs. ground truth segmentation for the middle
+    slice in each spatial dimension (Z, Y, X) on separate figures.
 
-def show_napari(image, mask_nuclei, mask_membrane, gt_nuclei, gt_membrane, metrics_nuclei, metrics_membrane):
+    Args:
+        image (np.ndarray): The input image, expected to have 2 channels (nuclei, membrane).
+                            Can be 3D (C, H, W) or 4D (Z, C, H, W).
+        mask_nuclei (np.ndarray): The predicted nuclei segmentation mask.
+        mask_membrane (np.ndarray): The predicted membrane segmentation mask.
+        gt_nuclei (np.ndarray): The ground truth nuclei segmentation mask.
+        gt_membrane (np.ndarray): The ground truth membrane segmentation mask.
+        slice_index (any, optional): This argument is ignored. The function always
+                                     uses the middle slice for each dimension.
+    """
+    if image.ndim not in [3, 4]:
+        raise ValueError("Image must be 3D (C, H, W) or 4D (Z, C, H, W)")
 
-    viewer = napari.Viewer(title="Cellpose Single Image Visualization")
-    is_3d = image.ndim == 4
-    if is_3d:
-        mid_slice = image.shape[0] // 2
-        viewer.dims.set_point(0, mid_slice)
-        viewer.add_image(image[:, 0], name="Channel 1", colormap="cyan")
-        viewer.add_image(image[:, 1], name="Channel 2", colormap="magenta")
-    else:
-        viewer.add_image(image, name="Image")
+    if image.ndim == 3:  # If image is 2D (C, H, W), add a dummy Z dimension
+        image = image[np.newaxis, ...]
+        mask_nuclei = mask_nuclei[np.newaxis, ...]
+        mask_membrane = mask_membrane[np.newaxis, ...]
+        gt_nuclei = gt_nuclei[np.newaxis, ...]
+        gt_membrane = gt_membrane[np.newaxis, ...]
 
-    if gt_nuclei is not None:
-        viewer.add_labels(gt_nuclei, name="Nuclei (GT)", opacity=0.5)
+    z, c, h, w = image.shape
+    mid_z, mid_y, mid_x = z // 2, h // 2, w // 2
 
-    if gt_membrane is not None:
-        viewer.add_labels(gt_membrane, name="Membrane (GT)", opacity=0.5)
+    # Slices for Z, Y, X dimensions
+    slices = {
+        'Z-Slice': (
+            image[mid_z, ...],
+            mask_nuclei[mid_z, ...], mask_membrane[mid_z, ...],
+            gt_nuclei[mid_z, ...], gt_membrane[mid_z, ...]
+        ),
+        'Y-Slice': (
+            image[:, :, mid_y, :].transpose(1, 0, 2),  # C, Z, W
+            mask_nuclei[:, mid_y, :],  # Z, W
+            mask_membrane[:, mid_y, :],
+            gt_nuclei[:, mid_y, :],
+            gt_membrane[:, mid_y, :]
+        ),
+        'X-Slice': (
+            image[:, :, :, mid_x].transpose(1, 0, 2),  # C, Z, H
+            mask_nuclei[:, :, mid_x],  # Z, H
+            mask_membrane[:, :, mid_x],
+            gt_nuclei[:, :, mid_x],
+            gt_membrane[:, :, mid_x]
+        )
+    }
 
-    if mask_nuclei is not None:
-        f1_score = metrics_nuclei.get('f1_score', 0.0)
-        mask_name = f"Nuclei (Pred) (F1={f1_score:.2f})"
-        viewer.add_labels(mask_nuclei, name=mask_name, opacity=0.7)
+    for title, data in slices.items():
+        fig, axes = plt.subplots(1, 2, figsize=(16, 8), sharex=True, sharey=True)
+        fig.suptitle(f'Segmentation Result - {title}', fontsize=16)
 
-    if mask_membrane is not None:
-        f1_score = metrics_membrane.get('f1_score', 0.0)
-        mask_name = f"Membrane (Pred) (F1={f1_score:.2f})"
-        viewer.add_labels(mask_membrane, name=mask_name, opacity=0.7)
+        ax1, ax2 = axes.ravel()
+        img_slice, m_nuc, m_mem, g_nuc, g_mem = data
 
-    logging.info("Launching Napari viewer. Close the window to exit.")
-    napari.run()
+        # Normalize and create a color image
+        nuclei_ch = img_slice[0].astype(np.float32)
+        membrane_ch = img_slice[1].astype(np.float32)
+        nuclei_ch /= (nuclei_ch.max() or 1.0)
+        membrane_ch /= (membrane_ch.max() or 1.0)
+        composite_img = np.stack([membrane_ch, nuclei_ch, nuclei_ch], axis=-1)
+
+        # Plot Predicted
+        ax1.imshow(composite_img)
+        ax1.contour(m_nuc, colors='cyan', linewidths=0.5)
+        ax1.contour(m_mem, colors='magenta', linewidths=0.5)
+        ax1.set_title('Prediction')
+        ax1.axis('off')
+
+        # Plot Ground Truth
+        ax2.imshow(composite_img)
+        ax2.contour(g_nuc, colors='cyan', linewidths=0.5)
+        ax2.contour(g_mem, colors='magenta', linewidths=0.5)
+        ax2.set_title('Ground Truth')
+        ax2.axis('off')
+
+        # Add a legend to the figure
+        legend_elements = [Line2D([0], [0], color='cyan', lw=2, label='Nuclei Mask'),
+                           Line2D([0], [0], color='magenta', lw=2, label='Membrane Mask')]
+        fig.legend(handles=legend_elements, loc='lower center', ncol=2, bbox_to_anchor=(0.5, 0.02))
+
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    plt.show()
