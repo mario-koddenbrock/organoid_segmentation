@@ -4,7 +4,7 @@ import os
 import time
 
 from cellpose_adapt.config.model_config import ModelConfig
-from cellpose_adapt.logging_config import setup_logging
+from cellpose_adapt.logger import setup_logging
 from cellpose_adapt.utils import get_device
 
 logger = logging.getLogger(__name__)
