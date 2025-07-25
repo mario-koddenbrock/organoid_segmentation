@@ -2,6 +2,31 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
 
+def plot_slice(image, title="", slice_index=None):
+    """
+    Plots a single slice of the image for a given channel.
+
+    Args:
+        image (np.ndarray): The input image, expected to have shape (Z, H, W) or (Z, C, H, W).
+        slice_index (int): The index of the slice to plot.
+        channel (int): The channel to plot (default is 0).
+    """
+
+    if slice_index is None:
+        # Use the middle slice if no index is provided
+        if image.ndim == 3:
+            slice_index = image.shape[0] // 2
+
+    img_slice = image[slice_index, ...]
+
+    title_str = f"{title} - Slice {slice_index}" if title else f"Slice {slice_index}"
+
+    plt.figure(figsize=(8, 8))
+    plt.imshow(img_slice, cmap='viridis')
+    plt.title(title_str)
+    plt.axis('off')
+    plt.show()
+
 
 def plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_membrane, slice_index=None):
     """
@@ -88,5 +113,6 @@ def plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_me
         fig.legend(handles=legend_elements, loc='lower center', ncol=2, bbox_to_anchor=(0.5, 0.02))
 
         plt.tight_layout(rect=[0, 0, 1, 0.95])
+        break
 
     plt.show()
