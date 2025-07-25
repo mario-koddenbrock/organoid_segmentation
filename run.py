@@ -1,15 +1,15 @@
 import logging
 import os
 
+import numpy as np
+from cellpose_adapt.plotting.napari_utils import show_napari
+
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 
-import numpy as np
+from utils.plotting import plot_segmentation_result, plot_slice
 
-from utils.plotting import plot_segmentation_result
-
-from skimage import segmentation
-from skimage.filters import threshold_otsu
-
+from skimage import filters, segmentation
+from scipy import ndimage as ndi
 from utils import cli
 from cellpose_adapt import core
 from cellpose_adapt import io
@@ -40,26 +40,34 @@ def main():
     metrics_nuclei = calculate_segmentation_stats(gt_nuclei, mask_nuclei, iou_threshold=0.75)
     logging.info(f"Performance (Nuclei): F1={metrics_nuclei.get('f1_score', 0):.3f}, Jaccard={metrics_nuclei.get('jaccard', 0):.3f}, ")
 
+    gradient = ndi.generic_gradient_magnitude(image_membrane.astype(float), ndi.sobel)
+    membrane_super_smooth = filters.gaussian(image_membrane, sigma=20)
+    # plot_slice(membrane_super_smooth, "Smoothed Membrane Image")
 
-    # Create a foreground mask to apply watershed on the nuclei mask
-    thresh = threshold_otsu(image_membrane)
-    foreground_mask = image_membrane > thresh
+    foreground_mask = membrane_super_smooth > filters.threshold_otsu(membrane_super_smooth)
+    # plot_slice(foreground_mask, "Foreground Mask with Otsu Threshold")
 
-    # Ensure all nuclei are included in the foreground mask for watershed seeding
-    # by taking the union of the thresholded membrane and the nuclei mask.
-    foreground_mask = foreground_mask | (mask_nuclei > 0)
+    # Step 3: Apply watershed
+    mask_membrane = segmentation.watershed(
+        image=gradient,
+        markers=mask_nuclei,
+        mask=foreground_mask,
+    )
+    # plot_slice(mask_membrane, "Watershed Segmentation with Mask")
+    mask_membrane[mask_membrane == 1] = 0
+    # plot_slice(mask_membrane, "Watershed Segmentation with Mask (Background Set to 0)")
 
     # Watershed the membrane image with nuclei mask as seeds
-    mask_membrane = segmentation.watershed(image_membrane, mask_nuclei, mask=foreground_mask)
+    # mask_membrane = segmentation.watershed(image_membrane, mask_nuclei, mask=foreground_mask)
     logging.info(f"Number of membrane segments detected: {len(set(mask_membrane.flat)) - 1}")
 
     # --- Evaluate and Launch Napari Viewer ---
-    metrics_membrane = calculate_segmentation_stats(gt_membrane, mask_membrane, iou_threshold=0.75)
+    metrics_membrane = calculate_segmentation_stats(gt_membrane, mask_membrane, iou_threshold=0.5)
     logging.info(f"Performance (Membrane): F1={metrics_membrane.get('f1_score', 0):.3f}, Jaccard={metrics_membrane.get('jaccard', 0):.3f}, ")
 
-    plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_membrane)
 
-    # show_napari(image, mask_nuclei, mask_membrane, gt_nuclei, gt_membrane, metrics_nuclei, metrics_membrane)
+    plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_membrane)
+    show_napari(image, mask_nuclei, mask_membrane, gt_nuclei, gt_membrane, metrics_nuclei, metrics_membrane)
 
 
 if __name__ == "__main__":
