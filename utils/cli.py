@@ -15,13 +15,13 @@ def init():
         description="Run and visualize Cellpose results for a single image."
     )
     parser.add_argument(
-        "--image_path", type=str, required=True, help="Path to the input image."
+        "--image_path", type=str, required=False, help="Path to the input image."
     )
     parser.add_argument(
-        "--membrane_path", type=str, required=True, help="Path to the input image."
+        "--membrane_path", type=str, required=False, help="Path to the input image."
     )
     parser.add_argument(
-        "--nuclei_path", type=str, required=True, help="Path to the input image."
+        "--nuclei_path", type=str, required=False, help="Path to the input image."
     )
     parser.add_argument(
         "--config_path", type=str, required=True,
@@ -36,15 +36,15 @@ def init():
     if not os.path.exists(args.config_path):
         logging.error(f"Pipeline config file not found at {args.config_path}")
         raise (FileNotFoundError(f"Pipeline config file not found at {args.config_path}"))
-    if not os.path.exists(args.nuclei_path):
-        logging.error(f"Nuclei ground truth file not found at {args.nuclei_path}")
-        raise (FileNotFoundError(f"Nuclei ground truth file not found at {args.nuclei_path}"))
-    if not os.path.exists(args.image_path):
+    if args.nuclei_path and not os.path.exists(args.nuclei_path):
+        logging.warning(f"Nuclei ground truth file not found at {args.nuclei_path}")
+        raise FileNotFoundError(f"Nuclei ground truth file not found at {args.nuclei_path}")
+    if args.image_path and not os.path.exists(args.image_path):
         logging.error(f"Image file not found at {args.image_path}")
-        raise (FileNotFoundError(f"Image file not found at {args.image_path}"))
-    if not os.path.exists(args.membrane_path):
+        raise FileNotFoundError(f"Image file not found at {args.image_path}")
+    if args.membrane_path and not os.path.exists(args.membrane_path):
         logging.error(f"Membrane image file not found at {args.membrane_path}")
-        raise (FileNotFoundError(f"Membrane image file not found at {args.membrane_path}"))
+        raise FileNotFoundError(f"Membrane image file not found at {args.membrane_path}")
     cfg = ModelConfig.from_json(args.config_path)
     device = get_device()
     return args, cfg, device
