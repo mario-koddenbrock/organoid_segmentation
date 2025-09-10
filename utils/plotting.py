@@ -84,14 +84,47 @@ def plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_me
 
     plots_dir = 'plots'
     os.makedirs(plots_dir, exist_ok=True)
+    font_color = 'white'
+
+    jaccard_score = metrics_membrane.get('jaccard', 0)
+    f1_score = metrics_membrane.get('f1_score', 0)
+    num_gt = len(set(gt_membrane.flat)) - 1
+    num_pred = len(set(mask_membrane.flat)) - 1
 
     for title, data in slices.items():
-        jaccard_score = metrics_membrane.get('jaccard', 0)
-        fig, axes = plt.subplots(1, 2, figsize=(16, 8), sharex=True, sharey=True)
-        fig.suptitle(f'Segmentation Result - {title} - Jaccard: {jaccard_score:.3f}', fontsize=16)
+
+        # Make figsize square for each subplot
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5), sharex=True, sharey=True)
+        fig.suptitle(f'{title} - Jaccard: {jaccard_score:.3f} - F1@0.5: {f1_score:.3f}', fontsize=16, color=font_color)
+        plt.subplots_adjust(wspace=0.01, hspace=0.01, top=0.9) # Adjust spacing
 
         ax1, ax2 = axes.ravel()
         img_slice, m_nuc, m_mem, g_nuc, g_mem = data
+
+        # --- Start of Bounding Box Calculation ---
+        combined_gt_mask = (g_nuc > 0) | (g_mem > 0)
+        rows, cols = np.where(combined_gt_mask)
+
+        padding = 10
+        if rows.size > 0 and cols.size > 0:
+            min_row, max_row = rows.min(), rows.max()
+            min_col, max_col = cols.min(), cols.max()
+
+            # --- Make the bounding box square ---
+            height = max_row - min_row
+            width = max_col - min_col
+            size = max(height, width)
+            center_row = min_row + height // 2
+            center_col = min_col + width // 2
+
+            start_row = max(0, center_row - size // 2 - padding)
+            end_row = min(combined_gt_mask.shape[0], center_row + size // 2 + padding)
+            start_col = max(0, center_col - size // 2 - padding)
+            end_col = min(combined_gt_mask.shape[1], center_col + size // 2 + padding)
+        else:
+            start_row, end_row = 0, combined_gt_mask.shape[0]
+            start_col, end_col = 0, combined_gt_mask.shape[1]
+        # --- End of Bounding Box Calculation ---
 
         # Normalize and create a color image
         nuclei_ch = img_slice[0].astype(np.float32)
@@ -104,25 +137,28 @@ def plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_me
         ax1.imshow(composite_img)
         ax1.contour(g_nuc, colors='cyan', linewidths=0.5)
         ax1.contour(g_mem, colors='magenta', linewidths=0.5)
-        ax1.set_title('Ground Truth')
+        ax1.set_title(f'Ground Truth ({num_gt})', color=font_color)
         ax1.axis('off')
+        ax1.set_xlim(start_col, end_col)
+        ax1.set_ylim(end_row, start_row)
 
         # Plot Predicted
         ax2.imshow(composite_img)
         ax2.contour(m_nuc, colors='cyan', linewidths=0.5)
         ax2.contour(m_mem, colors='magenta', linewidths=0.5)
-        ax2.set_title('Prediction')
+        ax2.set_title(f'Prediction ({num_pred})', color=font_color)
         ax2.axis('off')
+        ax2.set_xlim(start_col, end_col)
+        ax2.set_ylim(end_row, start_row)
 
-        # Create a legend
+        # Create a legend inside the plot
         legend_elements = [Line2D([0], [0], color='cyan', lw=2, label='Nuclei'),
                            Line2D([0], [0], color='magenta', lw=2, label='Membrane')]
-        fig.legend(handles=legend_elements, loc='lower center', ncol=2, bbox_to_anchor=(0.5, 0.0))
+        ax1.legend(handles=legend_elements, loc='lower right', frameon=False, labelcolor='white')
 
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
 
         base_name = os.path.basename(image_path)
         file_name = os.path.splitext(base_name)[0]
         save_path = os.path.join(plots_dir, f'{file_name}_{title}.png')
-        plt.savefig(save_path)
+        plt.savefig(save_path, transparent=True, bbox_inches='tight', pad_inches=0)
         plt.close(fig)
