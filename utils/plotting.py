@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
+import os
 
 def plot_slice(image, title="", slice_index=None):
     """
@@ -28,7 +29,7 @@ def plot_slice(image, title="", slice_index=None):
     plt.show()
 
 
-def plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_membrane, slice_index=None):
+def plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_membrane, metrics_membrane, image_path, slice_index=None):
     """
     Plots a comparison of predicted vs. ground truth segmentation for the middle
     slice in each spatial dimension (Z, Y, X) on separate figures.
@@ -40,6 +41,8 @@ def plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_me
         mask_membrane (np.ndarray): The predicted membrane segmentation mask.
         gt_nuclei (np.ndarray): The ground truth nuclei segmentation mask.
         gt_membrane (np.ndarray): The ground truth membrane segmentation mask.
+        metrics_membrane (dict): A dictionary of metrics for the membrane segmentation.
+        image_path (str): The path to the image file.
         slice_index (any, optional): This argument is ignored. The function always
                                      uses the middle slice for each dimension.
     """
@@ -79,9 +82,13 @@ def plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_me
         )
     }
 
+    plots_dir = 'plots'
+    os.makedirs(plots_dir, exist_ok=True)
+
     for title, data in slices.items():
+        jaccard_score = metrics_membrane.get('jaccard', 0)
         fig, axes = plt.subplots(1, 2, figsize=(16, 8), sharex=True, sharey=True)
-        fig.suptitle(f'Segmentation Result - {title}', fontsize=16)
+        fig.suptitle(f'Segmentation Result - {title} - Jaccard: {jaccard_score:.3f}', fontsize=16)
 
         ax1, ax2 = axes.ravel()
         img_slice, m_nuc, m_mem, g_nuc, g_mem = data
@@ -93,26 +100,29 @@ def plot_segmentation_result(image, mask_nuclei, mask_membrane, gt_nuclei, gt_me
         membrane_ch /= (membrane_ch.max() or 1.0)
         composite_img = np.stack([membrane_ch, nuclei_ch, nuclei_ch], axis=-1)
 
-        # Plot Predicted
+        # Plot Ground Truth
         ax1.imshow(composite_img)
-        ax1.contour(m_nuc, colors='cyan', linewidths=0.5)
-        ax1.contour(m_mem, colors='magenta', linewidths=0.5)
-        ax1.set_title('Prediction')
+        ax1.contour(g_nuc, colors='cyan', linewidths=0.5)
+        ax1.contour(g_mem, colors='magenta', linewidths=0.5)
+        ax1.set_title('Ground Truth')
         ax1.axis('off')
 
-        # Plot Ground Truth
+        # Plot Predicted
         ax2.imshow(composite_img)
-        ax2.contour(g_nuc, colors='cyan', linewidths=0.5)
-        ax2.contour(g_mem, colors='magenta', linewidths=0.5)
-        ax2.set_title('Ground Truth')
+        ax2.contour(m_nuc, colors='cyan', linewidths=0.5)
+        ax2.contour(m_mem, colors='magenta', linewidths=0.5)
+        ax2.set_title('Prediction')
         ax2.axis('off')
 
-        # Add a legend to the figure
-        legend_elements = [Line2D([0], [0], color='cyan', lw=2, label='Nuclei Mask'),
-                           Line2D([0], [0], color='magenta', lw=2, label='Membrane Mask')]
-        fig.legend(handles=legend_elements, loc='lower center', ncol=2, bbox_to_anchor=(0.5, 0.02))
+        # Create a legend
+        legend_elements = [Line2D([0], [0], color='cyan', lw=2, label='Nuclei'),
+                           Line2D([0], [0], color='magenta', lw=2, label='Membrane')]
+        fig.legend(handles=legend_elements, loc='lower center', ncol=2, bbox_to_anchor=(0.5, 0.0))
 
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
-        break
+        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
 
-    plt.show()
+        base_name = os.path.basename(image_path)
+        file_name = os.path.splitext(base_name)[0]
+        save_path = os.path.join(plots_dir, f'{file_name}_{title}.png')
+        plt.savefig(save_path)
+        plt.close(fig)
