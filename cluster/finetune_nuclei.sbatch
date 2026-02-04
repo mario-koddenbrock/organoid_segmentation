@@ -4,8 +4,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --output=cluster/logs/finetune_%j.out
-#SBATCH --error=cluster/logs/finetune_%j.err
+#SBATCH --output=cluster/logs/%j_finetune.log
+#SBATCH --error=cluster/logs/%j_finetune.log
 
 # --- Paths ---
 REPO_DIR="/home/cluster_home/koddenb/workspace/organoid_segmentation"
@@ -18,7 +18,7 @@ LEARNING_RATE=5e-5
 BATCH_SIZE=8
 TEST_FRACTION=0.2
 MIN_MASKS_PER_SLICE=1
-MIN_PIXELS=64
+MIN_PIXELS=8
 MIN_TRAIN_MASKS=5
 SAVE_DIR="${REPO_DIR}"
 MODEL_NAME="cpsam_nuclei_finetuned"
