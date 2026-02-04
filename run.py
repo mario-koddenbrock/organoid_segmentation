@@ -1,8 +1,6 @@
 import logging
 import os
 
-from cellpose_adapt.plotting.napari_utils import show_napari
-
 from utils.preprocessing import rescale_intensity
 
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
