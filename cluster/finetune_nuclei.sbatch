@@ -10,7 +10,7 @@
 # --- Paths ---
 REPO_DIR="/home/cluster_home/koddenb/workspace/organoid_segmentation"
 DATA_DIR="/scratch/koddenbrock/Organoids"
-PYTHON="/home/cluster_home/koddenb/conda/envs/organoid_segmentation/bin/python"
+CONDA_ENV="organoid_segmentation"
 
 # --- Training hyperparameters ---
 N_EPOCHS=100
@@ -35,6 +35,7 @@ FOLDERS=(
 # --- Setup ---
 cd "${REPO_DIR}" || exit 1
 mkdir -p cluster/logs
+conda activate "${CONDA_ENV}"
 
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node:   $(hostname)"
@@ -43,7 +44,7 @@ echo "Start:  $(date)"
 echo "---"
 
 # --- Run finetuning ---
-${PYTHON} finetune_nuclei.py \
+python finetune_nuclei.py \
     --data_dir "${DATA_DIR}" \
     --folders "${FOLDERS[@]}" \
     --n_epochs ${N_EPOCHS} \
