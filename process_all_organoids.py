@@ -5,7 +5,7 @@ from run import process_organoid
 from utils import cli
 
 def main():
-    base_dir = "/Users/koddenbrock/Repository/organoid_segmentation/data/Organoids"
+    base_dir = "data/Organoids"
     organoid_folders = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d)) and not d.startswith('.')]
 
     args, cfg, device = cli.init()
