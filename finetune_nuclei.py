@@ -2,11 +2,14 @@
 Finetune CellposeSAM (cpsam) on organoid nuclei data.
 
 Since cellpose training operates on 2D slices only, this script:
-1. Loads all 3D organoid images and nuclei masks from data/Organoids/
+1. Loads organoid images and nuclei masks from specified folders in data/Organoids/
 2. Slices them along the Z-axis into individual 2D images
 3. Filters out slices that have no masks (empty ground truth)
-4. Splits into train/test sets (at the organoid level to avoid data leakage)
+4. Randomly splits individual images into train/test sets
 5. Finetunes the pretrained cpsam model
+
+By default only 40x folders are included. Use --folders to specify exactly which
+folders to use, or --all_folders to include everything (including 25x data).
 """
 
 import os
@@ -14,12 +17,10 @@ import logging
 import argparse
 import numpy as np
 from tifffile import imread
-from cellpose import models, train
+from cellpose import models, train, metrics
+import matplotlib.pyplot as plt
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+logging.basicConfig(level=logging.INFO)
 
 
 def get_device():
@@ -32,15 +33,26 @@ def get_device():
     return torch.device("cpu")
 
 
-def collect_image_mask_pairs(base_dir):
+def collect_image_mask_pairs(base_dir, folders=None):
     """
-    Walk data/Organoids/ and collect (image_path, nuclei_mask_path, organoid_folder) tuples.
+    Walk data/Organoids/ and collect (image_path, nuclei_mask_path) tuples.
+    If `folders` is given, only those subdirectories are included.
     """
     pairs = []
-    organoid_folders = sorted([
+    all_folders = sorted([
         d for d in os.listdir(base_dir)
         if os.path.isdir(os.path.join(base_dir, d)) and not d.startswith(".")
     ])
+
+    if folders is not None:
+        missing = set(folders) - set(all_folders)
+        if missing:
+            logging.warning(f"Folders not found in {base_dir}: {missing}")
+        organoid_folders = [f for f in all_folders if f in folders]
+    else:
+        organoid_folders = all_folders
+
+    logging.info(f"Using folders: {organoid_folders}")
 
     for folder in organoid_folders:
         image_dir = os.path.join(base_dir, folder, "images_cropped_isotropic")
@@ -67,7 +79,6 @@ def collect_image_mask_pairs(base_dir):
             pairs.append((
                 os.path.join(image_dir, img_file),
                 mask_path,
-                folder,
             ))
 
     return pairs
@@ -130,33 +141,27 @@ def slice_3d_to_2d(image_3d, mask_3d, min_masks=1, min_pixels=64):
     return images_2d, masks_2d, kept_indices
 
 
-def split_by_organoid(pairs, test_fraction=0.2, seed=42):
+def split_images(pairs, test_fraction=0.2, seed=42):
     """
-    Split image/mask pairs into train and test sets at the organoid level
-    to prevent data leakage between slices of the same volume appearing
-    in both sets.
-
-    Groups by organoid folder, then assigns entire organoids to train or test.
+    Randomly split image/mask pairs into train and test sets at the
+    individual image level.
     """
     rng = np.random.default_rng(seed)
+    indices = np.arange(len(pairs))
+    rng.shuffle(indices)
 
-    # Group by organoid folder
-    organoid_groups = {}
-    for img_path, mask_path, folder in pairs:
-        organoid_groups.setdefault(folder, []).append((img_path, mask_path))
+    n_test = max(1, int(len(pairs) * test_fraction))
+    test_indices = set(indices[:n_test])
 
-    folders = sorted(organoid_groups.keys())
-    rng.shuffle(folders)
+    train_pairs = [pairs[i] for i in range(len(pairs)) if i not in test_indices]
+    test_pairs = [pairs[i] for i in range(len(pairs)) if i in test_indices]
 
-    n_test = max(1, int(len(folders) * test_fraction))
-    test_folders = set(folders[:n_test])
-    train_folders = set(folders[n_test:])
-
-    logging.info(f"Train organoids ({len(train_folders)}): {sorted(train_folders)}")
-    logging.info(f"Test organoids  ({len(test_folders)}):  {sorted(test_folders)}")
-
-    train_pairs = [(ip, mp) for ip, mp, f in pairs if f in train_folders]
-    test_pairs = [(ip, mp) for ip, mp, f in pairs if f in test_folders]
+    logging.info(f"Train images ({len(train_pairs)}):")
+    for ip, _ in train_pairs:
+        logging.info(f"  {os.path.basename(ip)}")
+    logging.info(f"Test images  ({len(test_pairs)}):")
+    for ip, _ in test_pairs:
+        logging.info(f"  {os.path.basename(ip)}")
 
     return train_pairs, test_pairs
 
@@ -213,6 +218,20 @@ def parse_args():
         help="Path to the Organoids data directory"
     )
     parser.add_argument(
+        "--folders", type=str, nargs="+",
+        default=[
+            "20231108_P021N_40xSil_Hoechst_SiRActin",
+            "20240220_P013T_40xSil_Hoechst_SiRActin",
+            "20240305_P013T_40xSil_Hoechst_SiRActin",
+            "20241009_P013T_40xSil_Hoechst_SiRActin",
+        ],
+        help="Organoid folders to include (default: 40x folders only)"
+    )
+    parser.add_argument(
+        "--all_folders", action="store_true",
+        help="Use all folders in data_dir, overrides --folders"
+    )
+    parser.add_argument(
         "--n_epochs", type=int, default=100,
         help="Number of training epochs"
     )
@@ -238,11 +257,11 @@ def parse_args():
     )
     parser.add_argument(
         "--test_fraction", type=float, default=0.2,
-        help="Fraction of organoids to hold out for testing"
+        help="Fraction of images to hold out for testing"
     )
     parser.add_argument(
-        "--save_dir", type=str, default="models",
-        help="Directory to save the finetuned model"
+        "--save_dir", type=str, default=".",
+        help="Base directory for model output (cellpose saves into <save_dir>/models/)"
     )
     parser.add_argument(
         "--model_name", type=str, default="cpsam_nuclei_finetuned",
@@ -255,6 +274,87 @@ def parse_args():
     return parser.parse_args()
 
 
+def evaluate_model(model, images, masks, thresholds=(0.5, 0.75, 0.9)):
+    """
+    Run model on a list of 2D images and compute average precision against
+    ground truth masks at the given IoU thresholds.
+
+    Returns:
+        mean_ap: dict mapping threshold -> mean AP across images
+        per_image_ap: np.ndarray of shape (n_images, n_thresholds)
+    """
+    n = len(images)
+    logging.info(f"  Evaluating on {n} images...")
+    pred_masks = []
+    for i, img in enumerate(images):
+        m, _, _ = model.eval(
+            img, normalize=True, diameter=None,
+            min_size=15, flow_threshold=0.4, cellprob_threshold=0.0,
+        )
+        pred_masks.append(m)
+        if (i + 1) % 50 == 0 or (i + 1) == n:
+            logging.info(f"  Evaluated {i + 1}/{n} images")
+
+    ap, tp, fp, fn = metrics.average_precision(masks, pred_masks,
+                                               threshold=list(thresholds))
+    # ap shape: (n_images, n_thresholds)
+    mean_ap = {th: float(ap[:, i].mean()) for i, th in enumerate(thresholds)}
+    return mean_ap, ap
+
+
+def plot_learning_curves(train_losses, test_losses, save_path):
+    """Save a plot of train/test loss vs. epoch."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+    epochs = np.arange(1, len(train_losses) + 1)
+    ax.plot(epochs, train_losses, label="Train loss")
+    if test_losses:
+        ax.plot(epochs, test_losses, label="Test loss")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Loss")
+    ax.set_title("Learning Curves")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+    logging.info(f"Learning curve saved to {save_path}")
+
+
+def plot_ap_comparison(ap_before, ap_after, save_path):
+    """Save a grouped bar chart comparing AP before vs after finetuning."""
+    thresholds = sorted(ap_before.keys())
+    before_vals = [ap_before[t] for t in thresholds]
+    after_vals = [ap_after[t] for t in thresholds]
+
+    x = np.arange(len(thresholds))
+    width = 0.3
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    bars1 = ax.bar(x - width / 2, before_vals, width, label="Before finetuning")
+    bars2 = ax.bar(x + width / 2, after_vals, width, label="After finetuning")
+
+    ax.set_xlabel("IoU Threshold")
+    ax.set_ylabel("Mean Average Precision")
+    ax.set_title("Segmentation Performance: Before vs After Finetuning")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{t:.2f}" for t in thresholds])
+    ax.set_ylim(0, 1.05)
+    ax.legend()
+    ax.grid(True, axis="y", alpha=0.3)
+
+    for bar in bars1:
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                f"{bar.get_height():.3f}", ha="center", va="bottom", fontsize=9)
+    for bar in bars2:
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                f"{bar.get_height():.3f}", ha="center", va="bottom", fontsize=9)
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+    logging.info(f"AP comparison plot saved to {save_path}")
+
+
 def main():
     args = parse_args()
 
@@ -262,17 +362,18 @@ def main():
     device = get_device()
     logging.info(f"Using device: {device}")
 
-    # 1. Collect all image/mask pairs
+    # 1. Collect image/mask pairs from specified folders
+    folders = None if args.all_folders else args.folders
     logging.info(f"Scanning {args.data_dir} for organoid data...")
-    pairs = collect_image_mask_pairs(args.data_dir)
-    logging.info(f"Found {len(pairs)} image/mask pairs across organoids")
+    pairs = collect_image_mask_pairs(args.data_dir, folders=folders)
+    logging.info(f"Found {len(pairs)} image/mask pairs")
 
     if not pairs:
-        logging.error("No image/mask pairs found. Check your data directory.")
+        logging.error("No image/mask pairs found. Check your data directory and --folders.")
         return
 
-    # 2. Split at organoid level
-    train_pairs, test_pairs = split_by_organoid(
+    # 2. Random train/test split at the image level
+    train_pairs, test_pairs = split_images(
         pairs, test_fraction=args.test_fraction, seed=args.seed
     )
 
@@ -302,10 +403,19 @@ def main():
     model = models.CellposeModel(pretrained_model="cpsam", device=device,
                                  use_bfloat16=use_bfloat16)
 
-    # 5. Create save directory
-    os.makedirs(args.save_dir, exist_ok=True)
+    # 5. Evaluate pretrained model on test set BEFORE finetuning
+    ap_before = None
+    if test_images:
+        logging.info("Evaluating pretrained model on test set (before finetuning)...")
+        ap_before, _ = evaluate_model(model, test_images, test_masks)
+        for th, val in sorted(ap_before.items()):
+            logging.info(f"  AP@{th:.2f} = {val:.4f}")
 
-    # 6. Finetune
+    # 6. Create save directory (cellpose adds models/ subdirectory internally)
+    output_dir = os.path.join(args.save_dir, "models")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 7. Finetune
     logging.info(
         f"Starting finetuning: {args.n_epochs} epochs, "
         f"lr={args.learning_rate}, batch_size={args.batch_size}"
@@ -335,6 +445,39 @@ def main():
     logging.info(f"Final train loss: {train_losses[-1]:.4f}")
     if test_losses:
         logging.info(f"Final test loss:  {test_losses[-1]:.4f}")
+
+    # 8. Plot learning curves
+    plot_path = os.path.join(output_dir, f"{args.model_name}_learning_curves.png")
+    plot_learning_curves(train_losses, test_losses, plot_path)
+
+    # 9. Evaluate finetuned model on test set AFTER finetuning
+    if test_images:
+        logging.info("Evaluating finetuned model on test set (after finetuning)...")
+        finetuned_model = models.CellposeModel(
+            pretrained_model=model_path, device=device, use_bfloat16=use_bfloat16,
+        )
+        ap_after, _ = evaluate_model(finetuned_model, test_images, test_masks)
+        for th, val in sorted(ap_after.items()):
+            logging.info(f"  AP@{th:.2f} = {val:.4f}")
+
+        # 10. Print comparison summary
+        logging.info("=" * 50)
+        logging.info("Performance comparison (test set):")
+        logging.info(f"{'Metric':<12} {'Before':>10} {'After':>10} {'Delta':>10}")
+        logging.info("-" * 44)
+        for th in sorted(ap_before.keys()):
+            before = ap_before[th]
+            after = ap_after[th]
+            delta = after - before
+            sign = "+" if delta >= 0 else ""
+            logging.info(f"AP@{th:<9.2f} {before:>10.4f} {after:>10.4f} {sign}{delta:>9.4f}")
+        logging.info("=" * 50)
+
+        # 11. Save AP comparison plot
+        ap_plot_path = os.path.join(
+            output_dir, f"{args.model_name}_ap_comparison.png"
+        )
+        plot_ap_comparison(ap_before, ap_after, ap_plot_path)
 
 
 if __name__ == "__main__":
