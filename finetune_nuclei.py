@@ -83,11 +83,29 @@ def extract_nuclei_channel(volume):
     return volume
 
 
-def slice_3d_to_2d(image_3d, mask_3d, min_masks=1):
+def clean_mask(mask, min_pixels=64):
+    """
+    Remove mask instances smaller than `min_pixels` and relabel contiguously.
+    Tiny instances cause cellpose flow computation to crash.
+    """
+    cleaned = np.zeros_like(mask)
+    new_label = 1
+    for label_id in np.unique(mask):
+        if label_id == 0:
+            continue
+        region = mask == label_id
+        if region.sum() < min_pixels:
+            continue
+        cleaned[region] = new_label
+        new_label += 1
+    return cleaned
+
+
+def slice_3d_to_2d(image_3d, mask_3d, min_masks=1, min_pixels=64):
     """
     Slice a 3D volume into 2D slices along the Z-axis.
-    Filters out slices where the mask has fewer than `min_masks` unique labels
-    (excluding background 0).
+    Removes mask instances smaller than `min_pixels` pixels, then
+    filters out slices where fewer than `min_masks` labels remain.
 
     Returns:
         images_2d: list of 2D numpy arrays
@@ -99,14 +117,14 @@ def slice_3d_to_2d(image_3d, mask_3d, min_masks=1):
     kept_indices = []
 
     for z in range(image_3d.shape[0]):
-        mask_slice = mask_3d[z]
-        n_labels = len(np.unique(mask_slice)) - (1 if 0 in mask_slice else 0)
+        mask_slice = clean_mask(mask_3d[z], min_pixels=min_pixels)
+        n_labels = mask_slice.max()  # contiguous labels from clean_mask
 
         if n_labels < min_masks:
             continue
 
-        images_2d.append(image_3d[z])
-        masks_2d.append(mask_slice)
+        images_2d.append(image_3d[z].astype(np.float32))
+        masks_2d.append(mask_slice.astype(np.int32))
         kept_indices.append(z)
 
     return images_2d, masks_2d, kept_indices
@@ -143,7 +161,7 @@ def split_by_organoid(pairs, test_fraction=0.2, seed=42):
     return train_pairs, test_pairs
 
 
-def load_and_slice_pairs(pairs, min_masks_per_slice=1):
+def load_and_slice_pairs(pairs, min_masks_per_slice=1, min_pixels=64):
     """
     Load 3D volumes and slice into 2D, filtering empty slices.
 
@@ -170,12 +188,14 @@ def load_and_slice_pairs(pairs, min_masks_per_slice=1):
             continue
 
         images_2d, masks_2d, kept = slice_3d_to_2d(
-            nuclei_volume, mask_volume, min_masks=min_masks_per_slice
+            nuclei_volume, mask_volume,
+            min_masks=min_masks_per_slice,
+            min_pixels=min_pixels,
         )
         total_slices = nuclei_volume.shape[0]
         logging.info(
             f"  -> {len(kept)}/{total_slices} slices kept "
-            f"(filtered {total_slices - len(kept)} empty slices)"
+            f"(filtered {total_slices - len(kept)} empty/small-mask slices)"
         )
 
         all_images.extend(images_2d)
@@ -207,6 +227,10 @@ def parse_args():
     parser.add_argument(
         "--min_masks_per_slice", type=int, default=1,
         help="Minimum number of mask labels in a slice to keep it"
+    )
+    parser.add_argument(
+        "--min_pixels", type=int, default=64,
+        help="Minimum pixels per mask instance; smaller instances are removed"
     )
     parser.add_argument(
         "--min_train_masks", type=int, default=5,
@@ -255,13 +279,15 @@ def main():
     # 3. Load and slice into 2D
     logging.info("Loading and slicing training data...")
     train_images, train_masks = load_and_slice_pairs(
-        train_pairs, min_masks_per_slice=args.min_masks_per_slice
+        train_pairs, min_masks_per_slice=args.min_masks_per_slice,
+        min_pixels=args.min_pixels,
     )
     logging.info(f"Training set: {len(train_images)} slices")
 
     logging.info("Loading and slicing test data...")
     test_images, test_masks = load_and_slice_pairs(
-        test_pairs, min_masks_per_slice=args.min_masks_per_slice
+        test_pairs, min_masks_per_slice=args.min_masks_per_slice,
+        min_pixels=args.min_pixels,
     )
     logging.info(f"Test set: {len(test_images)} slices")
 
@@ -270,8 +296,11 @@ def main():
         return
 
     # 4. Initialize pretrained CellposeSAM model
-    logging.info("Loading pretrained cpsam model...")
-    model = models.CellposeModel(pretrained_model="cpsam", device=device)
+    # use_bfloat16=False required: MPS does not support bfloat16 backward passes
+    use_bfloat16 = device.type == "cuda"
+    logging.info(f"Loading pretrained cpsam model (bfloat16={use_bfloat16})...")
+    model = models.CellposeModel(pretrained_model="cpsam", device=device,
+                                 use_bfloat16=use_bfloat16)
 
     # 5. Create save directory
     os.makedirs(args.save_dir, exist_ok=True)
