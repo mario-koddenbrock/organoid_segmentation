@@ -35,6 +35,7 @@ FOLDERS=(
 # --- Setup ---
 cd "${REPO_DIR}" || exit 1
 mkdir -p cluster/logs
+source /usr/lib/python3.6/site-packages/conda/shell/etc/profile.d/conda.sh
 conda activate "${CONDA_ENV}"
 
 echo "Job ID: ${SLURM_JOB_ID}"
