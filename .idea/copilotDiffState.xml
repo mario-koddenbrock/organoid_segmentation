@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CopilotDiffPersistence">
+    <option name="pendingDiffs">
+      <map>
+        <entry key="$PROJECT_DIR$/requirements.txt">
+          <value>
+            <PendingDiffInfo>
+              <option name="filePath" value="$PROJECT_DIR$/requirements.txt" />
+              <option name="originalContent" value="git+https://github.com/mario-koddenbrock/cellpose-adapt.git&#10;napari~=0.6.2&#10;scikit-image~=0.25.2&#10;opencv-python~=4.10.0.84" />
+              <option name="updatedContent" value="git+https://github.com/mario-koddenbrock/cellpose-adapt.git&#10;napari~=0.6.2&#10;scikit-image~=0.25.2&#10;opencv-python~=4.10.0.84" />
+            </PendingDiffInfo>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>
