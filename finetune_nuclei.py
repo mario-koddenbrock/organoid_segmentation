@@ -491,8 +491,6 @@ def main():
 
     logging.info(f"Finetuned model saved to: {model_path}")
     logging.info(f"Final train loss: {train_losses[-1]:.4f}")
-    if test_losses:
-        logging.info(f"Final test loss:  {test_losses[-1]:.4f}")
 
     # 8. Plot learning curves
     plot_path = os.path.join(output_dir, f"{args.model_name}_learning_curves.png")
