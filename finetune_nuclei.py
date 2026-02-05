@@ -114,31 +114,76 @@ def clean_mask(mask, min_pixels=64):
 
 def slice_3d_to_2d(image_3d, mask_3d, min_masks=1, min_pixels=64):
     """
-    Slice a 3D volume into 2D slices along the Z-axis.
+    Slice a 3D volume into 2D slices along all three axes (Z, Y, X).
     Removes mask instances smaller than `min_pixels` pixels, then
     filters out slices where fewer than `min_masks` labels remain.
 
     Returns:
         images_2d: list of 2D numpy arrays
         masks_2d: list of 2D numpy arrays
-        kept_indices: list of z-indices that were kept
+        kept_indices: list of (axis, index) tuples that were kept
     """
     images_2d = []
     masks_2d = []
     kept_indices = []
 
-    for z in range(image_3d.shape[0]):
-        mask_slice = clean_mask(mask_3d[z], min_pixels=min_pixels)
-        n_labels = mask_slice.max()  # contiguous labels from clean_mask
+    axis_names = ["Z", "Y", "X"]
+    for axis in range(3):
+        for i in range(image_3d.shape[axis]):
+            img_slice = np.take(image_3d, i, axis=axis)
+            msk_slice = np.take(mask_3d, i, axis=axis)
 
-        if n_labels < min_masks:
-            continue
+            mask_slice = clean_mask(msk_slice, min_pixels=min_pixels)
+            n_labels = mask_slice.max()  # contiguous labels from clean_mask
 
-        images_2d.append(image_3d[z].astype(np.float32))
-        masks_2d.append(mask_slice.astype(np.int32))
-        kept_indices.append(z)
+            if n_labels < min_masks:
+                continue
+
+            images_2d.append(img_slice.astype(np.float32))
+            masks_2d.append(mask_slice.astype(np.int32))
+            kept_indices.append((axis_names[axis], i))
 
     return images_2d, masks_2d, kept_indices
+
+
+def augment_slices(images, masks, seed=None):
+    """
+    Apply basic augmentations to 2D image/mask pairs.
+
+    For each input slice, generates augmented copies via:
+      - horizontal flip
+      - vertical flip
+      - 90-degree rotation
+      - 180-degree rotation
+      - 270-degree rotation
+
+    All transforms are applied identically to image and mask.
+    Returns the original slices plus all augmented copies.
+    """
+    rng = np.random.default_rng(seed)
+    aug_images = list(images)
+    aug_masks = list(masks)
+
+    for img, msk in zip(images, masks):
+        # horizontal flip
+        aug_images.append(np.flip(img, axis=1).copy())
+        aug_masks.append(np.flip(msk, axis=1).copy())
+
+        # vertical flip
+        aug_images.append(np.flip(img, axis=0).copy())
+        aug_masks.append(np.flip(msk, axis=0).copy())
+
+        # 90, 180, 270 degree rotations
+        for k in [1, 2, 3]:
+            aug_images.append(np.rot90(img, k=k).copy())
+            aug_masks.append(np.rot90(msk, k=k).copy())
+
+    # shuffle so augmented copies are not grouped together
+    order = rng.permutation(len(aug_images))
+    aug_images = [aug_images[i] for i in order]
+    aug_masks = [aug_masks[i] for i in order]
+
+    return aug_images, aug_masks
 
 
 def split_images(pairs, test_fraction=0.2, seed=42):
@@ -197,9 +242,9 @@ def load_and_slice_pairs(pairs, min_masks_per_slice=1, min_pixels=64):
             min_masks=min_masks_per_slice,
             min_pixels=min_pixels,
         )
-        total_slices = nuclei_volume.shape[0]
+        total_slices = sum(nuclei_volume.shape[:3])
         logging.info(
-            f"  -> {len(kept)}/{total_slices} slices kept "
+            f"  -> {len(kept)}/{total_slices} slices kept across Z/Y/X axes "
             f"(filtered {total_slices - len(kept)} empty/small-mask slices)"
         )
 
@@ -383,7 +428,10 @@ def main():
         train_pairs, min_masks_per_slice=args.min_masks_per_slice,
         min_pixels=args.min_pixels,
     )
-    logging.info(f"Training set: {len(train_images)} slices")
+    logging.info(f"Training set: {len(train_images)} slices (before augmentation)")
+
+    train_images, train_masks = augment_slices(train_images, train_masks)
+    logging.info(f"Training set: {len(train_images)} slices (after augmentation)")
 
     logging.info("Loading and slicing test data...")
     test_images, test_masks = load_and_slice_pairs(
