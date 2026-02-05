@@ -4,8 +4,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --output=cluster/logs/%j_finetune.log
-#SBATCH --error=cluster/logs/%j_finetune.log
+#SBATCH --output=logs/%j_finetune.log
+#SBATCH --error=logs/%j_finetune.log
 
 # --- Paths ---
 REPO_DIR="/home/cluster_home/koddenb/workspace/organoid_segmentation"
