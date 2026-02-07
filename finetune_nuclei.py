@@ -352,7 +352,7 @@ def plot_learning_curves(train_losses, test_losses, save_path):
     fig, ax = plt.subplots(figsize=(8, 5))
     epochs = np.arange(1, len(train_losses) + 1)
     ax.plot(epochs, train_losses, label="Train loss")
-    if test_losses:
+    if len(test_losses) > 0:
         ax.plot(epochs, test_losses, label="Test loss")
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Loss")
