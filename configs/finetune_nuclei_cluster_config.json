@@ -1,0 +1,42 @@
+{
+  "description": "Finetuning configuration for CellposeSAM on 3D organoid nuclei (40x, cluster).",
+  "data": {
+    "train_image_dirs": [
+      "/scratch/koddenbrock/Organoids/20231108_P021N_40xSil_Hoechst_SiRActin/images_cropped_isotropic",
+      "/scratch/koddenbrock/Organoids/20240220_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic",
+      "/scratch/koddenbrock/Organoids/20240305_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic"
+    ],
+    "eval_image_dirs": [
+      "/scratch/koddenbrock/Organoids/20241009_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic"
+    ],
+    "gt_mapping": {
+      "replace": [["images_cropped_isotropic", "labelmaps/Nuclei"]],
+      "suffix": "_nuclei-labels.tif",
+      "img_suffix": ".tif"
+    }
+  },
+  "training": {
+    "n_epochs": 100,
+    "learning_rate": 1e-5,
+    "batch_size": 1,
+    "weight_decay": 0.1,
+    "scale_range": 0.5,
+    "bsize": 256,
+    "save_every": 50,
+    "min_masks_per_slice": 1,
+    "min_pixels": 64,
+    "min_train_masks": 0
+  },
+  "model": {
+    "base_model": "cpsam",
+    "save_dir": "/home/cluster_home/koddenb/workspace/organoid_segmentation",
+    "model_name": "cpsam_nuclei_finetuned"
+  },
+  "evaluation": {
+    "model_config_path": "/home/cluster_home/koddenb/workspace/organoid_segmentation/configs/manual_organoid_3d_nuclei_study_config.json",
+    "iou_threshold": 0.5,
+    "cache_dir_pretrained": "/home/cluster_home/koddenb/workspace/organoid_segmentation/results/.cache_pretrained",
+    "cache_dir_finetuned": "/home/cluster_home/koddenb/workspace/organoid_segmentation/results/.cache_finetuned",
+    "output_dir": "/home/cluster_home/koddenb/workspace/organoid_segmentation/results/finetune_comparison"
+  }
+}

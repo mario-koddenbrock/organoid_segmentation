@@ -6,10 +6,10 @@ Since cellpose training operates on 2D slices only, this script:
    listed under data.train_image_dirs in the config file
 2. Slices them along all three axes (Z, Y, X) into individual 2D images
 3. Filters out slices that have no masks (empty ground truth)
-4. Augments the training slices
-5. Finetunes the pretrained cpsam model
+4. Finetunes the pretrained cpsam model (train_seg handles augmentation internally)
 
-Evaluation (before and after) is run on data.eval_image_dirs.
+Evaluation (before and after) is run on data.eval_image_dirs in both 2D
+(slice-level) and 3D (full-volume, do_3D=True) modes.
 All settings are read from a JSON config file (default:
 configs/finetune_nuclei_config.json).
 """
@@ -159,42 +159,16 @@ def slice_3d_to_2d(image_3d, mask_3d, min_masks=1, min_pixels=64):
     return images_2d, masks_2d, kept_indices
 
 
-def augment_slices(images, masks, seed=None):
-    """
-    Apply basic augmentations: horizontal/vertical flip and 90/180/270° rotations.
-    Returns the original slices plus all augmented copies, shuffled.
-    """
-    rng = np.random.default_rng(seed)
-    aug_images = list(images)
-    aug_masks = list(masks)
-
-    for img, msk in zip(images, masks):
-        aug_images.append(np.flip(img, axis=1).copy())
-        aug_masks.append(np.flip(msk, axis=1).copy())
-
-        aug_images.append(np.flip(img, axis=0).copy())
-        aug_masks.append(np.flip(msk, axis=0).copy())
-
-        for k in [1, 2, 3]:
-            aug_images.append(np.rot90(img, k=k).copy())
-            aug_masks.append(np.rot90(msk, k=k).copy())
-
-    order = rng.permutation(len(aug_images))
-    aug_images = [aug_images[i] for i in order]
-    aug_masks = [aug_masks[i] for i in order]
-
-    return aug_images, aug_masks
-
-
 def load_and_slice_pairs(pairs, min_masks_per_slice=1, min_pixels=64):
     """
     Load 3D volumes from image/mask path pairs and slice into 2D.
 
     Returns:
-        all_images: list of 2D numpy arrays (grayscale nuclei channel)
-        all_masks:  list of 2D numpy arrays (integer instance labels)
+        all_images:   list of 2D numpy arrays (grayscale nuclei channel)
+        all_masks:    list of 2D numpy arrays (integer instance labels)
+        all_volumes:  list of (nuclei_volume, mask_volume) 3D array tuples
     """
-    all_images, all_masks = [], []
+    all_images, all_masks, all_volumes = [], [], []
 
     for img_path, mask_path in pairs:
         logging.info(f"Loading {os.path.basename(img_path)}")
@@ -223,8 +197,9 @@ def load_and_slice_pairs(pairs, min_masks_per_slice=1, min_pixels=64):
 
         all_images.extend(images_2d)
         all_masks.extend(masks_2d)
+        all_volumes.append((nuclei_volume, mask_volume))
 
-    return all_images, all_masks
+    return all_images, all_masks, all_volumes
 
 
 # ---------------------------------------------------------------------------
@@ -240,11 +215,11 @@ def evaluate_model(model, images, masks, thresholds=(0.5, 0.75, 0.9)):
         per_image_ap: np.ndarray of shape (n_images, n_thresholds)
     """
     n = len(images)
-    logging.info(f"  Evaluating on {n} images...")
+    logging.info(f"  Evaluating on {n} 2D slices...")
     pred_masks = []
     for i, img in enumerate(images):
         m, _, _ = model.eval(
-            img, normalize=True, diameter=None,
+            img, normalize=True, diameter=None, channels=None,
             min_size=15, flow_threshold=0.4, cellprob_threshold=0.0,
         )
         pred_masks.append(m)
@@ -252,6 +227,41 @@ def evaluate_model(model, images, masks, thresholds=(0.5, 0.75, 0.9)):
             logging.info(f"  Evaluated {i + 1}/{n} images")
 
     ap, tp, fp, fn = metrics.average_precision(masks, pred_masks, threshold=list(thresholds))
+    mean_ap = {th: float(ap[:, i].mean()) for i, th in enumerate(thresholds)}
+    return mean_ap, ap
+
+
+def evaluate_model_3d(model, volumes, thresholds=(0.5, 0.75, 0.9)):
+    """
+    Run model on 3D volumes using do_3D=True (tri-plane inference) and compute
+    mean average precision.
+
+    Args:
+        volumes: list of (nuclei_volume, mask_volume) tuples, each Z x H x W
+
+    Returns:
+        mean_ap: dict mapping threshold -> mean AP across volumes
+        per_volume_ap: np.ndarray of shape (n_volumes, n_thresholds)
+    """
+    import numpy as np
+    n = len(volumes)
+    logging.info(f"  Evaluating on {n} 3D volumes...")
+    pred_masks, gt_masks = [], []
+    for i, (nuclei_vol, mask_vol) in enumerate(volumes):
+        # Stack grayscale into 3-channel as expected by cpsam, channel axis last
+        img = np.stack((nuclei_vol, np.zeros_like(nuclei_vol), np.zeros_like(nuclei_vol)), axis=-1)
+        m, _, _ = model.eval(
+            img, channel_axis=-1, z_axis=0,
+            normalize=True, channels=None,
+            do_3D=True, flow3D_smooth=2,
+            diameter=30, bsize=256, batch_size=64,
+            niter=1000, min_size=1000,
+        )
+        pred_masks.append(m)
+        gt_masks.append(mask_vol)
+        logging.info(f"  Evaluated volume {i + 1}/{n}")
+
+    ap, tp, fp, fn = metrics.average_precision(gt_masks, pred_masks, threshold=list(thresholds))
     mean_ap = {th: float(ap[:, i].mean()) for i, th in enumerate(thresholds)}
     return mean_ap, ap
 
@@ -368,25 +378,22 @@ def main():
         logging.error("No training pairs found. Check data_dir and train_folders in config.")
         return
 
-    # 2. Load and slice into 2D
+    # 2. Load and slice into 2D (train_seg handles augmentation internally)
     logging.info("Loading and slicing training data...")
-    train_images, train_masks = load_and_slice_pairs(
+    train_images, train_masks, _ = load_and_slice_pairs(
         train_pairs,
         min_masks_per_slice=training_cfg["min_masks_per_slice"],
         min_pixels=training_cfg["min_pixels"],
     )
-    logging.info(f"Training set: {len(train_images)} slices (before augmentation)")
-
-    train_images, train_masks = augment_slices(train_images, train_masks)
-    logging.info(f"Training set: {len(train_images)} slices (after augmentation)")
+    logging.info(f"Training set: {len(train_images)} slices")
 
     logging.info("Loading and slicing eval data...")
-    eval_images, eval_masks = load_and_slice_pairs(
+    eval_images, eval_masks, eval_volumes = load_and_slice_pairs(
         eval_pairs,
         min_masks_per_slice=training_cfg["min_masks_per_slice"],
         min_pixels=training_cfg["min_pixels"],
     )
-    logging.info(f"Eval set: {len(eval_images)} slices")
+    logging.info(f"Eval set: {len(eval_images)} slices, {len(eval_volumes)} 3D volumes")
 
     if not train_images:
         logging.error("No training slices after filtering. Lower min_masks_per_slice in config.")
@@ -402,13 +409,19 @@ def main():
         use_bfloat16=use_bfloat16,
     )
 
-    # 4. Evaluate pretrained model BEFORE finetuning
-    ap_before = None
+    # 4. Evaluate pretrained model BEFORE finetuning (2D slices + 3D volumes)
+    ap_before_2d = None
+    ap_before_3d = None
     if eval_images:
-        logging.info("Evaluating pretrained model on eval set (before finetuning)...")
-        ap_before, _ = evaluate_model(model, eval_images, eval_masks)
-        for th, val in sorted(ap_before.items()):
-            logging.info(f"  AP@{th:.2f} = {val:.4f}")
+        logging.info("Evaluating pretrained model on eval set (before finetuning) — 2D...")
+        ap_before_2d, _ = evaluate_model(model, eval_images, eval_masks)
+        for th, val in sorted(ap_before_2d.items()):
+            logging.info(f"  2D AP@{th:.2f} = {val:.4f}")
+    if eval_volumes:
+        logging.info("Evaluating pretrained model on eval set (before finetuning) — 3D...")
+        ap_before_3d, _ = evaluate_model_3d(model, eval_volumes)
+        for th, val in sorted(ap_before_3d.items()):
+            logging.info(f"  3D AP@{th:.2f} = {val:.4f}")
 
     # 5. Create output directory
     output_dir = os.path.join(model_cfg["save_dir"], "models")
@@ -419,6 +432,9 @@ def main():
         f"Starting finetuning: {training_cfg['n_epochs']} epochs, "
         f"lr={training_cfg['learning_rate']}, batch_size={training_cfg['batch_size']}"
     )
+
+    nimg_per_epoch = min(800, max(8, len(train_images)))
+    logging.info(f"nimg_per_epoch={nimg_per_epoch}")
 
     model_path, train_losses, test_losses = train.train_seg(
         model.net,
@@ -438,6 +454,8 @@ def main():
         model_name=model_cfg["model_name"],
         scale_range=training_cfg["scale_range"],
         bsize=training_cfg["bsize"],
+        nimg_per_epoch=nimg_per_epoch,
+        nimg_test_per_epoch=len(eval_images) if eval_images else None,
     )
 
     logging.info(f"Finetuned model saved to: {model_path}")
@@ -447,34 +465,50 @@ def main():
     plot_path = os.path.join(output_dir, f"{model_cfg['model_name']}_learning_curves.png")
     plot_learning_curves(train_losses, test_losses, plot_path)
 
-    # 8. Evaluate finetuned model AFTER finetuning
-    if eval_images:
-        logging.info("Evaluating finetuned model on eval set (after finetuning)...")
-        finetuned_model = models.CellposeModel(
-            pretrained_model=model_path, device=device, use_bfloat16=use_bfloat16,
-        )
-        ap_after, _ = evaluate_model(finetuned_model, eval_images, eval_masks)
-        for th, val in sorted(ap_after.items()):
-            logging.info(f"  AP@{th:.2f} = {val:.4f}")
+    # 8. Evaluate finetuned model AFTER finetuning (2D + 3D)
+    finetuned_model = models.CellposeModel(
+        pretrained_model=str(model_path), device=device, use_bfloat16=use_bfloat16,
+    )
 
-        # 9. Print comparison summary
-        logging.info("=" * 50)
-        logging.info("Performance comparison (eval set):")
-        logging.info(f"{'Metric':<12} {'Before':>10} {'After':>10} {'Delta':>10}")
-        logging.info("-" * 44)
+    ap_after_2d = None
+    ap_after_3d = None
+    if eval_images:
+        logging.info("Evaluating finetuned model on eval set (after finetuning) — 2D...")
+        ap_after_2d, _ = evaluate_model(finetuned_model, eval_images, eval_masks)
+        for th, val in sorted(ap_after_2d.items()):
+            logging.info(f"  2D AP@{th:.2f} = {val:.4f}")
+    if eval_volumes:
+        logging.info("Evaluating finetuned model on eval set (after finetuning) — 3D...")
+        ap_after_3d, _ = evaluate_model_3d(finetuned_model, eval_volumes)
+        for th, val in sorted(ap_after_3d.items()):
+            logging.info(f"  3D AP@{th:.2f} = {val:.4f}")
+
+    # 9. Print comparison summary
+    logging.info("=" * 60)
+    logging.info("Performance comparison (eval set):")
+    for label, ap_before, ap_after in [
+        ("2D", ap_before_2d, ap_after_2d),
+        ("3D", ap_before_3d, ap_after_3d),
+    ]:
+        if ap_before is None or ap_after is None:
+            continue
+        logging.info(f"\n  [{label}] {'Metric':<12} {'Before':>10} {'After':>10} {'Delta':>10}")
+        logging.info(f"  [{label}] " + "-" * 44)
         for th in sorted(ap_before.keys()):
             before = ap_before[th]
             after = ap_after[th]
             delta = after - before
             sign = "+" if delta >= 0 else ""
-            logging.info(f"AP@{th:<9.2f} {before:>10.4f} {after:>10.4f} {sign}{delta:>9.4f}")
-        logging.info("=" * 50)
+            logging.info(f"  [{label}] AP@{th:<9.2f} {before:>10.4f} {after:>10.4f} {sign}{delta:>9.4f}")
+    logging.info("=" * 60)
 
-        # 10. Save AP comparison plot
-        ap_plot_path = os.path.join(
-            output_dir, f"{model_cfg['model_name']}_ap_comparison.png"
-        )
-        plot_ap_comparison(ap_before, ap_after, ap_plot_path)
+    # 10. Save AP comparison plots
+    if ap_before_2d and ap_after_2d:
+        ap_plot_path = os.path.join(output_dir, f"{model_cfg['model_name']}_ap_comparison_2d.png")
+        plot_ap_comparison(ap_before_2d, ap_after_2d, ap_plot_path)
+    if ap_before_3d and ap_after_3d:
+        ap_plot_path = os.path.join(output_dir, f"{model_cfg['model_name']}_ap_comparison_3d.png")
+        plot_ap_comparison(ap_before_3d, ap_after_3d, ap_plot_path)
 
 
 if __name__ == "__main__":
