@@ -2,26 +2,34 @@
 Finetune CellposeSAM (cpsam) on organoid nuclei data.
 
 Since cellpose training operates on 2D slices only, this script:
-1. Loads organoid images and nuclei masks from specified folders in data/Organoids/
-2. Slices them along the Z-axis into individual 2D images
+1. Loads organoid images and nuclei masks from the full image directory paths
+   listed under data.train_image_dirs in the config file
+2. Slices them along all three axes (Z, Y, X) into individual 2D images
 3. Filters out slices that have no masks (empty ground truth)
-4. Randomly splits individual images into train/test sets
+4. Augments the training slices
 5. Finetunes the pretrained cpsam model
 
-By default only 40x folders are included. Use --folders to specify exactly which
-folders to use, or --all_folders to include everything (including 25x data).
+Evaluation (before and after) is run on data.eval_image_dirs.
+All settings are read from a JSON config file (default:
+configs/finetune_nuclei_config.json).
 """
 
-import os
-import logging
 import argparse
-import numpy as np
-from tifffile import imread
-from cellpose import models, train, metrics
+import json
+import logging
+import os
+
 import matplotlib.pyplot as plt
+import numpy as np
+from cellpose import metrics, models, train
+from tifffile import imread
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+
+# ---------------------------------------------------------------------------
+# Device
+# ---------------------------------------------------------------------------
 
 def get_device():
     """Auto-detect best available device."""
@@ -33,56 +41,70 @@ def get_device():
     return torch.device("cpu")
 
 
-def collect_image_mask_pairs(base_dir, folders=None):
+# ---------------------------------------------------------------------------
+# Config loading
+# ---------------------------------------------------------------------------
+
+def load_finetune_config(path: str) -> dict:
+    """Load and return the finetuning configuration from a JSON file."""
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Config file not found: {path}")
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# Data collection
+# ---------------------------------------------------------------------------
+
+def collect_image_mask_pairs(image_dirs, gt_mapping):
     """
-    Walk data/Organoids/ and collect (image_path, nuclei_mask_path) tuples.
-    If `folders` is given, only those subdirectories are included.
+    Collect (image_path, mask_path) pairs from a list of full image directory paths.
+    GT paths are derived from each image path using gt_mapping rules.
+    Directories or individual images without a matching GT are skipped.
     """
+    img_suffix = gt_mapping.get("img_suffix", ".tif")
+    gt_suffix = gt_mapping.get("suffix", "_nuclei-labels.tif")
+    replacements = gt_mapping.get("replace", [])
+
     pairs = []
-    all_folders = sorted([
-        d for d in os.listdir(base_dir)
-        if os.path.isdir(os.path.join(base_dir, d)) and not d.startswith(".")
-    ])
-
-    if folders is not None:
-        missing = set(folders) - set(all_folders)
-        if missing:
-            logging.warning(f"Folders not found in {base_dir}: {missing}")
-        organoid_folders = [f for f in all_folders if f in folders]
-    else:
-        organoid_folders = all_folders
-
-    logging.info(f"Using folders: {organoid_folders}")
-
-    for folder in organoid_folders:
-        image_dir = os.path.join(base_dir, folder, "images_cropped_isotropic")
-        nuclei_dir = os.path.join(base_dir, folder, "labelmaps", "Nuclei")
-
-        if not os.path.isdir(image_dir) or not os.path.isdir(nuclei_dir):
-            logging.warning(f"Skipping {folder}: missing images or nuclei labelmaps.")
+    for image_dir in image_dirs:
+        if not os.path.isdir(image_dir):
+            logging.warning(f"Image directory not found, skipping: {image_dir}")
             continue
+
+        # Derive the GT directory by applying path replacements to the image dir
+        gt_dir = image_dir
+        for old, new in replacements:
+            gt_dir = gt_dir.replace(old, new)
 
         image_files = sorted([
             f for f in os.listdir(image_dir) if f.endswith((".tif", ".tiff"))
         ])
 
+        dir_pairs = []
         for img_file in image_files:
-            # Derive nuclei mask filename: <name>.tif -> <name>_nuclei-labels.tif
-            base_name = os.path.splitext(img_file)[0]
-            mask_file = base_name + "_nuclei-labels.tif"
-            mask_path = os.path.join(nuclei_dir, mask_file)
+            base_name = img_file
+            if base_name.endswith(img_suffix):
+                base_name = base_name[:-len(img_suffix)]
+            gt_file = base_name + gt_suffix
+            gt_path = os.path.join(gt_dir, gt_file)
 
-            if not os.path.isfile(mask_path):
-                logging.warning(f"No nuclei mask found for {img_file}, expected {mask_file}")
+            if not os.path.isfile(gt_path):
+                logging.warning(f"No nuclei mask found for {img_file}, expected: {gt_path}")
                 continue
 
-            pairs.append((
-                os.path.join(image_dir, img_file),
-                mask_path,
-            ))
+            dir_pairs.append((os.path.join(image_dir, img_file), gt_path))
+
+        logging.info(f"Found {len(dir_pairs)} pairs in: {image_dir}")
+        pairs.extend(dir_pairs)
 
     return pairs
 
+
+# ---------------------------------------------------------------------------
+# Volume processing
+# ---------------------------------------------------------------------------
 
 def extract_nuclei_channel(volume):
     """
@@ -117,15 +139,8 @@ def slice_3d_to_2d(image_3d, mask_3d, min_masks=1, min_pixels=64):
     Slice a 3D volume into 2D slices along all three axes (Z, Y, X).
     Removes mask instances smaller than `min_pixels` pixels, then
     filters out slices where fewer than `min_masks` labels remain.
-
-    Returns:
-        images_2d: list of 2D numpy arrays
-        masks_2d: list of 2D numpy arrays
-        kept_indices: list of (axis, index) tuples that were kept
     """
-    images_2d = []
-    masks_2d = []
-    kept_indices = []
+    images_2d, masks_2d, kept_indices = [], [], []
 
     axis_names = ["Z", "Y", "X"]
     for axis in range(3):
@@ -134,9 +149,7 @@ def slice_3d_to_2d(image_3d, mask_3d, min_masks=1, min_pixels=64):
             msk_slice = np.take(mask_3d, i, axis=axis)
 
             mask_slice = clean_mask(msk_slice, min_pixels=min_pixels)
-            n_labels = mask_slice.max()  # contiguous labels from clean_mask
-
-            if n_labels < min_masks:
+            if mask_slice.max() < min_masks:
                 continue
 
             images_2d.append(img_slice.astype(np.float32))
@@ -148,37 +161,24 @@ def slice_3d_to_2d(image_3d, mask_3d, min_masks=1, min_pixels=64):
 
 def augment_slices(images, masks, seed=None):
     """
-    Apply basic augmentations to 2D image/mask pairs.
-
-    For each input slice, generates augmented copies via:
-      - horizontal flip
-      - vertical flip
-      - 90-degree rotation
-      - 180-degree rotation
-      - 270-degree rotation
-
-    All transforms are applied identically to image and mask.
-    Returns the original slices plus all augmented copies.
+    Apply basic augmentations: horizontal/vertical flip and 90/180/270° rotations.
+    Returns the original slices plus all augmented copies, shuffled.
     """
     rng = np.random.default_rng(seed)
     aug_images = list(images)
     aug_masks = list(masks)
 
     for img, msk in zip(images, masks):
-        # horizontal flip
         aug_images.append(np.flip(img, axis=1).copy())
         aug_masks.append(np.flip(msk, axis=1).copy())
 
-        # vertical flip
         aug_images.append(np.flip(img, axis=0).copy())
         aug_masks.append(np.flip(msk, axis=0).copy())
 
-        # 90, 180, 270 degree rotations
         for k in [1, 2, 3]:
             aug_images.append(np.rot90(img, k=k).copy())
             aug_masks.append(np.rot90(msk, k=k).copy())
 
-    # shuffle so augmented copies are not grouped together
     order = rng.permutation(len(aug_images))
     aug_images = [aug_images[i] for i in order]
     aug_masks = [aug_masks[i] for i in order]
@@ -186,48 +186,21 @@ def augment_slices(images, masks, seed=None):
     return aug_images, aug_masks
 
 
-def split_images(pairs, test_fraction=0.2, seed=42):
-    """
-    Randomly split image/mask pairs into train and test sets at the
-    individual image level.
-    """
-    rng = np.random.default_rng(seed)
-    indices = np.arange(len(pairs))
-    rng.shuffle(indices)
-
-    n_test = max(1, int(len(pairs) * test_fraction))
-    test_indices = set(indices[:n_test])
-
-    train_pairs = [pairs[i] for i in range(len(pairs)) if i not in test_indices]
-    test_pairs = [pairs[i] for i in range(len(pairs)) if i in test_indices]
-
-    logging.info(f"Train images ({len(train_pairs)}):")
-    for ip, _ in train_pairs:
-        logging.info(f"  {os.path.basename(ip)}")
-    logging.info(f"Test images  ({len(test_pairs)}):")
-    for ip, _ in test_pairs:
-        logging.info(f"  {os.path.basename(ip)}")
-
-    return train_pairs, test_pairs
-
-
 def load_and_slice_pairs(pairs, min_masks_per_slice=1, min_pixels=64):
     """
-    Load 3D volumes and slice into 2D, filtering empty slices.
+    Load 3D volumes from image/mask path pairs and slice into 2D.
 
     Returns:
         all_images: list of 2D numpy arrays (grayscale nuclei channel)
-        all_masks: list of 2D numpy arrays (integer instance labels)
+        all_masks:  list of 2D numpy arrays (integer instance labels)
     """
-    all_images = []
-    all_masks = []
+    all_images, all_masks = [], []
 
     for img_path, mask_path in pairs:
         logging.info(f"Loading {os.path.basename(img_path)}")
         volume = imread(img_path)
         mask_volume = imread(mask_path)
 
-        # Extract nuclei channel from multichannel volume
         nuclei_volume = extract_nuclei_channel(volume)
 
         if nuclei_volume.shape != mask_volume.shape:
@@ -254,75 +227,13 @@ def load_and_slice_pairs(pairs, min_masks_per_slice=1, min_pixels=64):
     return all_images, all_masks
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Finetune CellposeSAM on organoid nuclei data"
-    )
-    parser.add_argument(
-        "--data_dir", type=str, default="data/Organoids",
-        help="Path to the Organoids data directory"
-    )
-    parser.add_argument(
-        "--folders", type=str, nargs="+",
-        default=[
-            "20231108_P021N_40xSil_Hoechst_SiRActin",
-            "20240220_P013T_40xSil_Hoechst_SiRActin",
-            "20240305_P013T_40xSil_Hoechst_SiRActin",
-            "20241009_P013T_40xSil_Hoechst_SiRActin",
-        ],
-        help="Organoid folders to include (default: 40x folders only)"
-    )
-    parser.add_argument(
-        "--all_folders", action="store_true",
-        help="Use all folders in data_dir, overrides --folders"
-    )
-    parser.add_argument(
-        "--n_epochs", type=int, default=100,
-        help="Number of training epochs"
-    )
-    parser.add_argument(
-        "--learning_rate", type=float, default=5e-5,
-        help="Learning rate"
-    )
-    parser.add_argument(
-        "--batch_size", type=int, default=8,
-        help="Batch size (patches per GPU step)"
-    )
-    parser.add_argument(
-        "--min_masks_per_slice", type=int, default=1,
-        help="Minimum number of mask labels in a slice to keep it"
-    )
-    parser.add_argument(
-        "--min_pixels", type=int, default=64,
-        help="Minimum pixels per mask instance; smaller instances are removed"
-    )
-    parser.add_argument(
-        "--min_train_masks", type=int, default=5,
-        help="Cellpose min_train_masks: minimum masks for an image to be used in training"
-    )
-    parser.add_argument(
-        "--test_fraction", type=float, default=0.2,
-        help="Fraction of images to hold out for testing"
-    )
-    parser.add_argument(
-        "--save_dir", type=str, default=".",
-        help="Base directory for model output (cellpose saves into <save_dir>/models/)"
-    )
-    parser.add_argument(
-        "--model_name", type=str, default="cpsam_nuclei_finetuned",
-        help="Name for the finetuned model"
-    )
-    parser.add_argument(
-        "--seed", type=int, default=42,
-        help="Random seed for train/test split"
-    )
-    return parser.parse_args()
-
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
 
 def evaluate_model(model, images, masks, thresholds=(0.5, 0.75, 0.9)):
     """
-    Run model on a list of 2D images and compute average precision against
-    ground truth masks at the given IoU thresholds.
+    Run model on a list of 2D images and compute mean average precision.
 
     Returns:
         mean_ap: dict mapping threshold -> mean AP across images
@@ -340,12 +251,14 @@ def evaluate_model(model, images, masks, thresholds=(0.5, 0.75, 0.9)):
         if (i + 1) % 50 == 0 or (i + 1) == n:
             logging.info(f"  Evaluated {i + 1}/{n} images")
 
-    ap, tp, fp, fn = metrics.average_precision(masks, pred_masks,
-                                               threshold=list(thresholds))
-    # ap shape: (n_images, n_thresholds)
+    ap, tp, fp, fn = metrics.average_precision(masks, pred_masks, threshold=list(thresholds))
     mean_ap = {th: float(ap[:, i].mean()) for i, th in enumerate(thresholds)}
     return mean_ap, ap
 
+
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
 
 def plot_learning_curves(train_losses, test_losses, save_path):
     """Save a plot of train/test loss vs. epoch."""
@@ -400,115 +313,153 @@ def plot_ap_comparison(ap_before, ap_after, save_path):
     logging.info(f"AP comparison plot saved to {save_path}")
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Finetune CellposeSAM on organoid nuclei data"
+    )
+    parser.add_argument(
+        "--config", type=str,
+        default="configs/finetune_nuclei_config.json",
+        help="Path to the finetuning configuration JSON file",
+    )
+    parser.add_argument(
+        "--device", type=str, default=None,
+        help="Compute device (cuda/mps/cpu). Auto-detected if not specified.",
+    )
+    return parser.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
     args = parse_args()
 
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-    device = get_device()
+    device = get_device() if args.device is None else __import__("torch").device(args.device)
     logging.info(f"Using device: {device}")
 
-    # 1. Collect image/mask pairs from specified folders
-    folders = None if args.all_folders else args.folders
-    logging.info(f"Scanning {args.data_dir} for organoid data...")
-    pairs = collect_image_mask_pairs(args.data_dir, folders=folders)
-    logging.info(f"Found {len(pairs)} image/mask pairs")
+    cfg = load_finetune_config(args.config)
+    logging.info(f"Loaded config from: {args.config}")
 
-    if not pairs:
-        logging.error("No image/mask pairs found. Check your data directory and --folders.")
+    data_cfg = cfg["data"]
+    training_cfg = cfg["training"]
+    model_cfg = cfg["model"]
+
+    train_image_dirs = data_cfg["train_image_dirs"]
+    eval_image_dirs = data_cfg["eval_image_dirs"]
+    gt_mapping = data_cfg["gt_mapping"]
+
+    # 1. Collect image/mask pairs per split
+    logging.info(f"Collecting training pairs from {len(train_image_dirs)} director(ies)...")
+    train_pairs = collect_image_mask_pairs(train_image_dirs, gt_mapping)
+    logging.info(f"Found {len(train_pairs)} training image/mask pairs")
+
+    logging.info(f"Collecting eval pairs from {len(eval_image_dirs)} director(ies)...")
+    eval_pairs = collect_image_mask_pairs(eval_image_dirs, gt_mapping)
+    logging.info(f"Found {len(eval_pairs)} eval image/mask pairs")
+
+    if not train_pairs:
+        logging.error("No training pairs found. Check data_dir and train_folders in config.")
         return
 
-    # 2. Random train/test split at the image level
-    train_pairs, test_pairs = split_images(
-        pairs, test_fraction=args.test_fraction, seed=args.seed
-    )
-
-    # 3. Load and slice into 2D
+    # 2. Load and slice into 2D
     logging.info("Loading and slicing training data...")
     train_images, train_masks = load_and_slice_pairs(
-        train_pairs, min_masks_per_slice=args.min_masks_per_slice,
-        min_pixels=args.min_pixels,
+        train_pairs,
+        min_masks_per_slice=training_cfg["min_masks_per_slice"],
+        min_pixels=training_cfg["min_pixels"],
     )
     logging.info(f"Training set: {len(train_images)} slices (before augmentation)")
 
     train_images, train_masks = augment_slices(train_images, train_masks)
     logging.info(f"Training set: {len(train_images)} slices (after augmentation)")
 
-    logging.info("Loading and slicing test data...")
-    test_images, test_masks = load_and_slice_pairs(
-        test_pairs, min_masks_per_slice=args.min_masks_per_slice,
-        min_pixels=args.min_pixels,
+    logging.info("Loading and slicing eval data...")
+    eval_images, eval_masks = load_and_slice_pairs(
+        eval_pairs,
+        min_masks_per_slice=training_cfg["min_masks_per_slice"],
+        min_pixels=training_cfg["min_pixels"],
     )
-    logging.info(f"Test set: {len(test_images)} slices")
+    logging.info(f"Eval set: {len(eval_images)} slices")
 
     if not train_images:
-        logging.error("No training slices after filtering. Lower --min_masks_per_slice.")
+        logging.error("No training slices after filtering. Lower min_masks_per_slice in config.")
         return
 
-    # 4. Initialize pretrained CellposeSAM model
+    # 3. Initialize pretrained CellposeSAM model
     # use_bfloat16=False required: MPS does not support bfloat16 backward passes
     use_bfloat16 = device.type == "cuda"
-    logging.info(f"Loading pretrained cpsam model (bfloat16={use_bfloat16})...")
-    model = models.CellposeModel(pretrained_model="cpsam", device=device,
-                                 use_bfloat16=use_bfloat16)
+    logging.info(f"Loading pretrained model '{model_cfg['base_model']}' (bfloat16={use_bfloat16})...")
+    model = models.CellposeModel(
+        pretrained_model=model_cfg["base_model"],
+        device=device,
+        use_bfloat16=use_bfloat16,
+    )
 
-    # 5. Evaluate pretrained model on test set BEFORE finetuning
+    # 4. Evaluate pretrained model BEFORE finetuning
     ap_before = None
-    if test_images:
-        logging.info("Evaluating pretrained model on test set (before finetuning)...")
-        ap_before, _ = evaluate_model(model, test_images, test_masks)
+    if eval_images:
+        logging.info("Evaluating pretrained model on eval set (before finetuning)...")
+        ap_before, _ = evaluate_model(model, eval_images, eval_masks)
         for th, val in sorted(ap_before.items()):
             logging.info(f"  AP@{th:.2f} = {val:.4f}")
 
-    # 6. Create save directory (cellpose adds models/ subdirectory internally)
-    output_dir = os.path.join(args.save_dir, "models")
+    # 5. Create output directory
+    output_dir = os.path.join(model_cfg["save_dir"], "models")
     os.makedirs(output_dir, exist_ok=True)
 
-    # 7. Finetune
+    # 6. Finetune
     logging.info(
-        f"Starting finetuning: {args.n_epochs} epochs, "
-        f"lr={args.learning_rate}, batch_size={args.batch_size}"
+        f"Starting finetuning: {training_cfg['n_epochs']} epochs, "
+        f"lr={training_cfg['learning_rate']}, batch_size={training_cfg['batch_size']}"
     )
 
     model_path, train_losses, test_losses = train.train_seg(
         model.net,
         train_data=train_images,
         train_labels=train_masks,
-        test_data=test_images if test_images else None,
-        test_labels=test_masks if test_images else None,
-        n_epochs=args.n_epochs,
-        learning_rate=args.learning_rate,
-        batch_size=args.batch_size,
-        weight_decay=0.1,
+        test_data=eval_images if eval_images else None,
+        test_labels=eval_masks if eval_images else None,
+        n_epochs=training_cfg["n_epochs"],
+        learning_rate=training_cfg["learning_rate"],
+        batch_size=training_cfg["batch_size"],
+        weight_decay=training_cfg["weight_decay"],
         normalize=True,
-        save_path=args.save_dir,
-        save_every=50,
+        save_path=model_cfg["save_dir"],
+        save_every=training_cfg["save_every"],
         save_each=False,
-        min_train_masks=args.min_train_masks,
-        model_name=args.model_name,
-        scale_range=0.5,
-        bsize=256,
+        min_train_masks=training_cfg["min_train_masks"],
+        model_name=model_cfg["model_name"],
+        scale_range=training_cfg["scale_range"],
+        bsize=training_cfg["bsize"],
     )
 
     logging.info(f"Finetuned model saved to: {model_path}")
     logging.info(f"Final train loss: {train_losses[-1]:.4f}")
 
-    # 8. Plot learning curves
-    plot_path = os.path.join(output_dir, f"{args.model_name}_learning_curves.png")
+    # 7. Plot learning curves
+    plot_path = os.path.join(output_dir, f"{model_cfg['model_name']}_learning_curves.png")
     plot_learning_curves(train_losses, test_losses, plot_path)
 
-    # 9. Evaluate finetuned model on test set AFTER finetuning
-    if test_images:
-        logging.info("Evaluating finetuned model on test set (after finetuning)...")
+    # 8. Evaluate finetuned model AFTER finetuning
+    if eval_images:
+        logging.info("Evaluating finetuned model on eval set (after finetuning)...")
         finetuned_model = models.CellposeModel(
             pretrained_model=model_path, device=device, use_bfloat16=use_bfloat16,
         )
-        ap_after, _ = evaluate_model(finetuned_model, test_images, test_masks)
+        ap_after, _ = evaluate_model(finetuned_model, eval_images, eval_masks)
         for th, val in sorted(ap_after.items()):
             logging.info(f"  AP@{th:.2f} = {val:.4f}")
 
-        # 10. Print comparison summary
+        # 9. Print comparison summary
         logging.info("=" * 50)
-        logging.info("Performance comparison (test set):")
+        logging.info("Performance comparison (eval set):")
         logging.info(f"{'Metric':<12} {'Before':>10} {'After':>10} {'Delta':>10}")
         logging.info("-" * 44)
         for th in sorted(ap_before.keys()):
@@ -519,9 +470,9 @@ def main():
             logging.info(f"AP@{th:<9.2f} {before:>10.4f} {after:>10.4f} {sign}{delta:>9.4f}")
         logging.info("=" * 50)
 
-        # 11. Save AP comparison plot
+        # 10. Save AP comparison plot
         ap_plot_path = os.path.join(
-            output_dir, f"{args.model_name}_ap_comparison.png"
+            output_dir, f"{model_cfg['model_name']}_ap_comparison.png"
         )
         plot_ap_comparison(ap_before, ap_after, ap_plot_path)
 
