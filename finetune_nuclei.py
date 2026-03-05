@@ -134,16 +134,21 @@ def clean_mask(mask, min_pixels=64):
     return cleaned
 
 
-def slice_3d_to_2d(image_3d, mask_3d, min_masks=1, min_pixels=64):
+def slice_3d_to_2d(image_3d, mask_3d, min_masks=1, min_pixels=64, axes=(0,)):
     """
-    Slice a 3D volume into 2D slices along all three axes (Z, Y, X).
+    Slice a 3D volume into 2D slices along the specified axes (0=Z, 1=Y, 2=X).
     Removes mask instances smaller than `min_pixels` pixels, then
     filters out slices where fewer than `min_masks` labels remain.
+
+    Default is Z-only (axes=(0,)) — the natural plane for fluorescence microscopy
+    and the plane the model is applied to during 3D inference. Including Y and X
+    cross-sections (axes=(0,1,2)) adds elongated partial-cell views that tend to
+    confuse fine-tuning on small datasets.
     """
     images_2d, masks_2d, kept_indices = [], [], []
 
-    axis_names = ["Z", "Y", "X"]
-    for axis in range(3):
+    axis_names = {0: "Z", 1: "Y", 2: "X"}
+    for axis in axes:
         for i in range(image_3d.shape[axis]):
             img_slice = np.take(image_3d, i, axis=axis)
             msk_slice = np.take(mask_3d, i, axis=axis)
@@ -159,9 +164,12 @@ def slice_3d_to_2d(image_3d, mask_3d, min_masks=1, min_pixels=64):
     return images_2d, masks_2d, kept_indices
 
 
-def load_and_slice_pairs(pairs, min_masks_per_slice=1, min_pixels=64):
+def load_and_slice_pairs(pairs, min_masks_per_slice=1, min_pixels=64, slice_axes=(0,)):
     """
     Load 3D volumes from image/mask path pairs and slice into 2D.
+
+    Args:
+        slice_axes: axes to slice along (0=Z, 1=Y, 2=X). Default Z-only.
 
     Returns:
         all_images:   list of 2D numpy arrays (grayscale nuclei channel)
@@ -188,8 +196,9 @@ def load_and_slice_pairs(pairs, min_masks_per_slice=1, min_pixels=64):
             nuclei_volume, mask_volume,
             min_masks=min_masks_per_slice,
             min_pixels=min_pixels,
+            axes=tuple(slice_axes),
         )
-        total_slices = sum(nuclei_volume.shape[:3])
+        total_slices = sum(nuclei_volume.shape[ax] for ax in slice_axes)
         logging.info(
             f"  -> {len(kept)}/{total_slices} slices kept across Z/Y/X axes "
             f"(filtered {total_slices - len(kept)} empty/small-mask slices)"
@@ -219,7 +228,7 @@ def evaluate_model(model, images, masks, thresholds=(0.5, 0.75, 0.9)):
     pred_masks = []
     for i, img in enumerate(images):
         m, _, _ = model.eval(
-            img, normalize=True, diameter=None, channels=None,
+            img, normalize=True, diameter=None,
             min_size=15, flow_threshold=0.4, cellprob_threshold=0.0,
         )
         pred_masks.append(m)
@@ -252,7 +261,7 @@ def evaluate_model_3d(model, volumes, thresholds=(0.5, 0.75, 0.9)):
         img = np.stack((nuclei_vol, np.zeros_like(nuclei_vol), np.zeros_like(nuclei_vol)), axis=-1)
         m, _, _ = model.eval(
             img, channel_axis=-1, z_axis=0,
-            normalize=True, channels=None,
+            normalize=True,
             do_3D=True, flow3D_smooth=2,
             diameter=30, bsize=256, batch_size=64,
             niter=1000, min_size=1000,
@@ -379,11 +388,20 @@ def main():
         return
 
     # 2. Load and slice into 2D (train_seg handles augmentation internally)
+    # Map axis names ("Z","Y","X") to indices; default Z-only to avoid
+    # lateral cross-section views that confuse fine-tuning on small datasets.
+    axis_map = {"Z": 0, "Y": 1, "X": 2}
+    slice_axes = tuple(
+        axis_map[a.upper()] for a in training_cfg.get("slice_axes", ["Z"])
+    )
+    logging.info(f"Slicing along axes: {training_cfg.get('slice_axes', ['Z'])}")
+
     logging.info("Loading and slicing training data...")
     train_images, train_masks, _ = load_and_slice_pairs(
         train_pairs,
         min_masks_per_slice=training_cfg["min_masks_per_slice"],
         min_pixels=training_cfg["min_pixels"],
+        slice_axes=slice_axes,
     )
     logging.info(f"Training set: {len(train_images)} slices")
 
@@ -392,6 +410,7 @@ def main():
         eval_pairs,
         min_masks_per_slice=training_cfg["min_masks_per_slice"],
         min_pixels=training_cfg["min_pixels"],
+        slice_axes=slice_axes,
     )
     logging.info(f"Eval set: {len(eval_images)} slices, {len(eval_volumes)} 3D volumes")
 
@@ -409,7 +428,19 @@ def main():
         use_bfloat16=use_bfloat16,
     )
 
-    # 4. Evaluate pretrained model BEFORE finetuning (2D slices + 3D volumes)
+    # 4. Optionally freeze the SAM encoder to prevent catastrophic forgetting.
+    # With a small dataset, fine-tuning all 307M ViT-L params overwrites pretrained
+    # features and always degrades generalization. Freezing the encoder and only
+    # training the output head (self.out) is strongly recommended for small datasets.
+    freeze_encoder = model_cfg.get("freeze_encoder", True)
+    if freeze_encoder:
+        for param in model.net.encoder.parameters():
+            param.requires_grad = False
+        logging.info("Encoder frozen — only training the output head (self.out)")
+    else:
+        logging.info("WARNING: full model fine-tuning with a small dataset risks catastrophic forgetting")
+
+    # 5. Evaluate pretrained model BEFORE finetuning (2D slices + 3D volumes)
     ap_before_2d = None
     ap_before_3d = None
     if eval_images:
@@ -423,11 +454,11 @@ def main():
         for th, val in sorted(ap_before_3d.items()):
             logging.info(f"  3D AP@{th:.2f} = {val:.4f}")
 
-    # 5. Create output directory
+    # 6. Create output directory
     output_dir = os.path.join(model_cfg["save_dir"], "models")
     os.makedirs(output_dir, exist_ok=True)
 
-    # 6. Finetune
+    # 7. Finetune
     logging.info(
         f"Starting finetuning: {training_cfg['n_epochs']} epochs, "
         f"lr={training_cfg['learning_rate']}, batch_size={training_cfg['batch_size']}"
@@ -461,11 +492,11 @@ def main():
     logging.info(f"Finetuned model saved to: {model_path}")
     logging.info(f"Final train loss: {train_losses[-1]:.4f}")
 
-    # 7. Plot learning curves
+    # 8. Plot learning curves
     plot_path = os.path.join(output_dir, f"{model_cfg['model_name']}_learning_curves.png")
     plot_learning_curves(train_losses, test_losses, plot_path)
 
-    # 8. Evaluate finetuned model AFTER finetuning (2D + 3D)
+    # 9. Evaluate finetuned model AFTER finetuning (2D + 3D)
     finetuned_model = models.CellposeModel(
         pretrained_model=str(model_path), device=device, use_bfloat16=use_bfloat16,
     )
@@ -483,7 +514,7 @@ def main():
         for th, val in sorted(ap_after_3d.items()):
             logging.info(f"  3D AP@{th:.2f} = {val:.4f}")
 
-    # 9. Print comparison summary
+    # 10. Print comparison summary
     logging.info("=" * 60)
     logging.info("Performance comparison (eval set):")
     for label, ap_before, ap_after in [
@@ -502,7 +533,7 @@ def main():
             logging.info(f"  [{label}] AP@{th:<9.2f} {before:>10.4f} {after:>10.4f} {sign}{delta:>9.4f}")
     logging.info("=" * 60)
 
-    # 10. Save AP comparison plots
+    # 11. Save AP comparison plots
     if ap_before_2d and ap_after_2d:
         ap_plot_path = os.path.join(output_dir, f"{model_cfg['model_name']}_ap_comparison_2d.png")
         plot_ap_comparison(ap_before_2d, ap_after_2d, ap_plot_path)
