@@ -16,8 +16,8 @@
     }
   },
   "training": {
-    "n_epochs": 100,
-    "learning_rate": 1e-5,
+    "n_epochs": 50,
+    "learning_rate": 5e-6,
     "batch_size": 1,
     "weight_decay": 0.1,
     "scale_range": 0.5,
@@ -25,12 +25,14 @@
     "save_every": 50,
     "min_masks_per_slice": 1,
     "min_pixels": 64,
-    "min_train_masks": 0
+    "min_train_masks": 0,
+    "slice_axes": ["Z"]
   },
   "model": {
     "base_model": "cpsam",
     "save_dir": ".",
-    "model_name": "cpsam_nuclei_finetuned"
+    "model_name": "cpsam_nuclei_finetuned",
+    "freeze_encoder": true
   },
   "evaluation": {
     "model_config_path": "configs/manual_organoid_3d_nuclei_study_config.json",
