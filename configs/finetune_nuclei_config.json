@@ -16,13 +16,13 @@
     }
   },
   "training": {
-    "n_epochs": 50,
-    "learning_rate": 5e-6,
-    "batch_size": 1,
-    "weight_decay": 0.1,
+    "n_epochs": 100,
+    "learning_rate": 1e-5,
+    "batch_size": 8,
+    "weight_decay": 1e-4,
     "scale_range": 0.5,
     "bsize": 256,
-    "save_every": 50,
+    "save_every": 100,
     "min_masks_per_slice": 1,
     "min_pixels": 64,
     "min_train_masks": 0,
