@@ -523,7 +523,8 @@ def main():
     ]:
         if ap_before is None or ap_after is None:
             continue
-        logging.info(f"\n  [{label}] {'Metric':<12} {'Before':>10} {'After':>10} {'Delta':>10}")
+        logging.info(f"\n")
+        logging.info(f"  [{label}] {'Metric':<12} {'Before':>10} {'After':>10} {'Delta':>10}")
         logging.info(f"  [{label}] " + "-" * 44)
         for th in sorted(ap_before.keys()):
             before = ap_before[th]
