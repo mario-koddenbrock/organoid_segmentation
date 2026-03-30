@@ -12,6 +12,6 @@
     "results_dir": "results/hparam_search",
     "results_json": "results/hparam_search/results.json"
   },
-  "primary_metric": "2d_ap_0.75",
+  "primary_metric": "3d_ap_0.75",
   "comment": "n_epochs/freeze_encoder combos with unfreeze use a lower max LR guard via max_lr_unfrozen."
 }
