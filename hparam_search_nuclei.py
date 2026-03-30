@@ -10,15 +10,12 @@ Usage:
 """
 
 import argparse
-import copy
 import itertools
 import json
 import logging
 import os
-import shutil
 import time
 
-import numpy as np
 from cellpose import models, train
 
 # Reuse helpers from the main finetuning script
