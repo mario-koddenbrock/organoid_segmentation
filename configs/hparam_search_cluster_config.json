@@ -12,5 +12,5 @@
     "results_dir": "/home/cluster_home/koddenb/workspace/organoid_segmentation/results/hparam_search",
     "results_json": "/home/cluster_home/koddenb/workspace/organoid_segmentation/results/hparam_search/results.json"
   },
-  "primary_metric": "2d_ap_0.75"
+  "primary_metric": "3d_ap_0.75"
 }
