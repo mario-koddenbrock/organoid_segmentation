@@ -17,7 +17,10 @@
       "weight_decay": 1e-4,
       "freeze_encoder": true,
       "batch_size": 8,
-      "note": "Best AP@0.90 (0.127) and strong AP@0.75 (0.807) — recommended model"
+      "note": "Best AP@0.90 (0.127) and strong AP@0.75 (0.807) — recommended model",
+      "expected_metrics": {
+        "ap_after_3d": {"0.5": 0.9327, "0.75": 0.8072, "0.9": 0.1271}
+      }
     },
     {
       "name": "trial_10_lr1e-4_wd1e-3",
@@ -28,7 +31,10 @@
       "weight_decay": 1e-3,
       "freeze_encoder": true,
       "batch_size": 8,
-      "note": "2nd best AP@0.90 (0.127), tied with trial_08"
+      "note": "2nd best AP@0.90 (0.127), tied with trial_08",
+      "expected_metrics": {
+        "ap_after_3d": {"0.5": 0.9327, "0.75": 0.8072, "0.9": 0.1271}
+      }
     },
     {
       "name": "trial_14_lr5e-4_wd1e-4",
@@ -39,7 +45,10 @@
       "weight_decay": 1e-4,
       "freeze_encoder": true,
       "batch_size": 8,
-      "note": "Best AP@0.75 (0.896) — high recall, AP@0.90 collapses to 0"
+      "note": "Best AP@0.75 (0.896) — high detection recall, AP@0.90 collapses to 0",
+      "expected_metrics": {
+        "ap_after_3d": {"0.5": 0.9136, "0.75": 0.8956, "0.9": 0.0}
+      }
     },
     {
       "name": "trial_16_lr5e-4_wd1e-3",
@@ -50,7 +59,10 @@
       "weight_decay": 1e-3,
       "freeze_encoder": true,
       "batch_size": 8,
-      "note": "2nd best AP@0.75 (0.896), tied with trial_14"
+      "note": "2nd best AP@0.75 (0.896), tied with trial_14",
+      "expected_metrics": {
+        "ap_after_3d": {"0.5": 0.9136, "0.75": 0.8956, "0.9": 0.0}
+      }
     }
   ],
   "data_root": "/scratch/koddenbrock/AKPS_Progression_Organoids",

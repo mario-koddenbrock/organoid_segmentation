@@ -183,9 +183,10 @@ def collect_leaf_dirs(data_root: str) -> list[tuple[str, str, str]]:
 # Summary report
 # ---------------------------------------------------------------------------
 
-def write_summary(model_name: str, leaf_dirs: list, predictions_dir: str, report_dir: str):
-    """Write a short Markdown summary of what was predicted for one model."""
+def write_summary(model_cfg: dict, leaf_dirs: list, predictions_dir: str, report_dir: str):
+    """Write a Markdown summary including finetuning parameters and per-folder prediction counts."""
     os.makedirs(report_dir, exist_ok=True)
+    model_name = model_cfg["name"]
     report_path = os.path.join(report_dir, f"{model_name}_prediction_summary.md")
 
     lines = [
@@ -193,18 +194,71 @@ def write_summary(model_name: str, leaf_dirs: list, predictions_dir: str, report
         f"",
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"",
-        f"| Group | Folder | Images |",
-        f"|-------|--------|--------|",
+    ]
+
+    # Finetuning parameters section
+    if model_cfg.get("skip_training", False):
+        lines += [
+            f"## Model",
+            f"",
+            f"**Pretrained CellposeSAM (`cpsam`) — no finetuning.**  ",
+            f"Used as baseline for comparison.",
+            f"",
+        ]
+    else:
+        lines += [
+            f"## Finetuning Parameters",
+            f"",
+            f"| Parameter | Value |",
+            f"|-----------|-------|",
+            f"| Base model | `{model_cfg['base_model']}` |",
+            f"| Learning rate | `{model_cfg['learning_rate']:.1e}` |",
+            f"| Weight decay | `{model_cfg['weight_decay']:.1e}` |",
+            f"| Epochs | `{model_cfg['n_epochs']}` |",
+            f"| Freeze encoder | `{model_cfg['freeze_encoder']}` |",
+            f"| Batch size | `{model_cfg['batch_size']}` |",
+            f"",
+        ]
+
+        # Expected metrics from hparam search if present
+        exp = model_cfg.get("expected_metrics", {})
+        if exp:
+            e2 = exp.get("ap_after_2d", {})
+            e3 = exp.get("ap_after_3d", {})
+            lines += [
+                f"## Expected Metrics (from hyperparameter search)",
+                f"",
+                f"| Metric | Value |",
+                f"|--------|-------|",
+            ]
+            for t in ["0.5", "0.75", "0.9"]:
+                if t in e3:
+                    lines.append(f"| 3D AP@{float(t):.2f} | {e3[t]:.4f} |")
+            lines.append(f"")
+
+        # Note
+        note = model_cfg.get("note", "")
+        if note:
+            lines += [f"_{note}_", f""]
+
+    # Per-folder prediction counts
+    lines += [
+        f"## Predicted Masks",
+        f"",
+        f"| Group | Folder | Masks written |",
+        f"|-------|--------|---------------|",
     ]
 
     total = 0
-    for group, date_folder, folder_path in leaf_dirs:
+    for group, date_folder, _ in leaf_dirs:
         out_dir = os.path.join(predictions_dir, model_name, group, date_folder)
-        n = len([f for f in os.listdir(out_dir) if f.lower().endswith((".tif", ".tiff"))]) if os.path.isdir(out_dir) else 0
+        n = len([
+            f for f in os.listdir(out_dir) if f.lower().endswith((".tif", ".tiff"))
+        ]) if os.path.isdir(out_dir) else 0
         lines.append(f"| {group} | {date_folder} | {n} |")
         total += n
 
-    lines += [f"", f"**Total masks written: {total}**"]
+    lines += [f"", f"**Total: {total} masks**"]
 
     with open(report_path, "w") as f:
         f.write("\n".join(lines) + "\n")
@@ -340,7 +394,7 @@ def main():
             logging.info(f"  {group}/{date_folder}")
             predict_directory(model, image_dir, out_dir)
 
-        write_summary(model_name, leaf_dirs, predictions_dir, report_dir)
+        write_summary(m, leaf_dirs, predictions_dir, report_dir)
         logging.info(f"Done: {model_name}")
 
     logging.info(f"\nAll predictions written to: {predictions_dir}")
