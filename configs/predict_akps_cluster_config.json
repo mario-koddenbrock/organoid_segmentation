@@ -1,0 +1,61 @@
+{
+  "description": "Predict nuclei masks on AKPS progression dataset with pretrained and best finetuned models.",
+  "base_config": "/home/cluster_home/koddenb/workspace/organoid_segmentation/configs/finetune_nuclei_cluster_config.json",
+  "models": [
+    {
+      "name": "pretrained_cpsam",
+      "base_model": "cpsam",
+      "skip_training": true,
+      "note": "Pretrained baseline — top 2 by AP@0.50 were identical to this, so included directly"
+    },
+    {
+      "name": "trial_08_lr1e-4_wd1e-4",
+      "base_model": "cpsam",
+      "skip_training": false,
+      "n_epochs": 50,
+      "learning_rate": 1e-4,
+      "weight_decay": 1e-4,
+      "freeze_encoder": true,
+      "batch_size": 8,
+      "note": "Best AP@0.90 (0.127) and strong AP@0.75 (0.807) — recommended model"
+    },
+    {
+      "name": "trial_10_lr1e-4_wd1e-3",
+      "base_model": "cpsam",
+      "skip_training": false,
+      "n_epochs": 50,
+      "learning_rate": 1e-4,
+      "weight_decay": 1e-3,
+      "freeze_encoder": true,
+      "batch_size": 8,
+      "note": "2nd best AP@0.90 (0.127), tied with trial_08"
+    },
+    {
+      "name": "trial_14_lr5e-4_wd1e-4",
+      "base_model": "cpsam",
+      "skip_training": false,
+      "n_epochs": 50,
+      "learning_rate": 5e-4,
+      "weight_decay": 1e-4,
+      "freeze_encoder": true,
+      "batch_size": 8,
+      "note": "Best AP@0.75 (0.896) — high recall, AP@0.90 collapses to 0"
+    },
+    {
+      "name": "trial_16_lr5e-4_wd1e-3",
+      "base_model": "cpsam",
+      "skip_training": false,
+      "n_epochs": 50,
+      "learning_rate": 5e-4,
+      "weight_decay": 1e-3,
+      "freeze_encoder": true,
+      "batch_size": 8,
+      "note": "2nd best AP@0.75 (0.896), tied with trial_14"
+    }
+  ],
+  "data_root": "/scratch/koddenbrock/AKPS_Progression_Organoids",
+  "output": {
+    "models_dir": "/home/cluster_home/koddenb/workspace/organoid_segmentation/models/hparam_best",
+    "predictions_dir": "/scratch/koddenbrock/AKPS_Progression_Organoids/predictions"
+  }
+}
