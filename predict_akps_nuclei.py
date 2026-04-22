@@ -156,6 +156,23 @@ def predict_directory(model, image_dir: str, out_dir: str):
     return n_done
 
 
+def collect_explicit_dirs(predict_dirs: list[str]) -> list[tuple[str, str, str]]:
+    """Convert a flat list of absolute paths to (parent_folder, subdir, abs_path) tuples."""
+    result = []
+    for path in predict_dirs:
+        path = os.path.abspath(path)
+        subdir = os.path.basename(path)
+        parent = os.path.basename(os.path.dirname(path))
+        has_tifs = os.path.isdir(path) and any(
+            f.lower().endswith((".tif", ".tiff")) for f in os.listdir(path)
+        )
+        if has_tifs:
+            result.append((parent, subdir, path))
+        else:
+            logging.warning(f"No .tif files found (skipping): {path}")
+    return result
+
+
 def collect_leaf_dirs(data_root: str) -> list[tuple[str, str, str]]:
     """
     Walk data_root two levels deep and return (group, date_folder, abs_path)
@@ -295,7 +312,6 @@ def main():
     base_cfg = load_finetune_config(cfg["base_config"])
 
     model_configs = cfg["models"]
-    data_root = cfg["data_root"]
     models_dir = cfg["output"]["models_dir"]
     predictions_dir = cfg["output"]["predictions_dir"]
     report_dir = os.path.join(predictions_dir, "_reports")
@@ -308,7 +324,10 @@ def main():
     # ------------------------------------------------------------------
     # 1. Discover all leaf image directories
     # ------------------------------------------------------------------
-    leaf_dirs = collect_leaf_dirs(data_root)
+    if "predict_dirs" in cfg:
+        leaf_dirs = collect_explicit_dirs(cfg["predict_dirs"])
+    else:
+        leaf_dirs = collect_leaf_dirs(cfg["data_root"])
     total_images = sum(
         len([f for f in os.listdir(p) if f.lower().endswith((".tif", ".tiff"))])
         for _, _, p in leaf_dirs
