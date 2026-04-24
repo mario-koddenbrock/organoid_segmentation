@@ -204,7 +204,8 @@ def collect_leaf_dirs(data_root: str) -> list[tuple[str, str, str]]:
 # Summary report
 # ---------------------------------------------------------------------------
 
-def write_summary(model_cfg: dict, leaf_dirs: list, predictions_dir: str, report_dir: str):
+def write_summary(model_cfg: dict, leaf_dirs: list, predictions_dir: str, report_dir: str,
+                  base_cfg: dict = None):
     """Write a Markdown summary including finetuning parameters and per-folder prediction counts."""
     os.makedirs(report_dir, exist_ok=True)
     model_name = model_cfg["name"]
@@ -241,10 +242,26 @@ def write_summary(model_cfg: dict, leaf_dirs: list, predictions_dir: str, report
             f"",
         ]
 
+        # Training data section
+        if base_cfg and "data" in base_cfg:
+            data_cfg = base_cfg["data"]
+            train_dirs = data_cfg.get("train_image_dirs", [])
+            eval_dirs = data_cfg.get("eval_image_dirs", [])
+            lines += [f"## Training Data", f""]
+            if train_dirs:
+                lines.append(f"**Training:**")
+                for d in train_dirs:
+                    lines.append(f"- `{os.path.basename(os.path.dirname(d))}`")
+                lines.append(f"")
+            if eval_dirs:
+                lines.append(f"**Evaluation (held-out):**")
+                for d in eval_dirs:
+                    lines.append(f"- `{os.path.basename(os.path.dirname(d))}`")
+                lines.append(f"")
+
         # Expected metrics from hparam search if present
         exp = model_cfg.get("expected_metrics", {})
         if exp:
-            e2 = exp.get("ap_after_2d", {})
             e3 = exp.get("ap_after_3d", {})
             lines += [
                 f"## Expected Metrics (from hyperparameter search)",
@@ -417,7 +434,7 @@ def main():
             logging.info(f"  {group}/{date_folder}")
             predict_directory(model, image_dir, out_dir)
 
-        write_summary(m, leaf_dirs, predictions_dir, report_dir)
+        write_summary(m, leaf_dirs, predictions_dir, report_dir, base_cfg=base_cfg)
         logging.info(f"Done: {model_name}")
 
     logging.info(f"\nAll predictions written to: {predictions_dir}")
