@@ -145,7 +145,11 @@ def predict_directory(model, image_dir: str, out_dir: str):
             logging.info(f"  [{i}/{len(image_files)}] Already exists, skipping: {fname}")
             continue
 
-        volume = imread(os.path.join(image_dir, fname))
+        try:
+            volume = imread(os.path.join(image_dir, fname))
+        except Exception as e:
+            logging.warning(f"  [{i}/{len(image_files)}] Skipping (unreadable): {fname} — {e}")
+            continue
         nuclei_vol = extract_nuclei_channel(volume)
         logging.info(f"  [{i}/{len(image_files)}] {fname}  shape={nuclei_vol.shape}")
 
