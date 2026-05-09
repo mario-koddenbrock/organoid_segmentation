@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <module type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
-    <content url="file://$USER_HOME$/Library/CloudStorage/OneDrive-SharedLibraries-BerlinerHochschulefürTechnik/Leibrock, Joshua - AKPS_Progression_Organoids" />
-    <content url="file://$USER_HOME$/Library/CloudStorage/OneDrive-SharedLibraries-BerlinerHochschulefürTechnik/Leibrock, Joshua - Organoids_for_autosegmentation" />
+    <content url="file://$USER_HOME$/Library/CloudStorage/OneDrive-Personal/HTW/Overleaf/Organoids" />
+    <content url="file://$USER_HOME$/Library/CloudStorage/OneDrive-SharedLibraries-BerlinerHochschulefürTechnik" />
     <content url="file://$MODULE_DIR$" />
     <orderEntry type="jdk" jdkName="organoid_segmentation" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
