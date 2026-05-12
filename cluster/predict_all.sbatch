@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=cpsam_predict_all
+#SBATCH --job-name=cpsam_evaluate_all
 #SBATCH --partition=Debug_node
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --output=logs/%j_predict_all.log
-#SBATCH --error=logs/%j_predict_all.log
+#SBATCH --output=logs/%j_evaluate_all.log
+#SBATCH --error=logs/%j_evaluate_all.log
 
 REPO_DIR="/home/cluster_home/koddenb/workspace/organoid_segmentation"
 CONDA_ENV="organoid_segmentation"
@@ -22,7 +22,7 @@ echo "Config: ${CONFIG}"
 echo "Start:  $(date)"
 echo "---"
 
-python predict_akps_nuclei.py --config "${CONFIG}" --skip-training
+python evaluate_all.py --config "${CONFIG}"
 
 echo "---"
 echo "End: $(date)"
