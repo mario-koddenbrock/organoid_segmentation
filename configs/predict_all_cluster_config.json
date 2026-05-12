@@ -1,0 +1,42 @@
+{
+  "description": "Predict nuclei masks on ALL organoid data (AKPS_Progression + Organoids + Organoids_for_autosegmentation) using the best finetuned models. models[] and output.models_dir are filled automatically by hparam_search_nuclei.py after HPO.",
+  "base_config": "/home/cluster_home/koddenb/workspace/organoid_segmentation/configs/finetune_nuclei_cluster_config.json",
+  "models": [],
+  "predict_dirs": [
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/A/20260305_A_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/A/20260316_A_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/AK/20251125_AK_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/AK/20251202_AK_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/AK/20251216_AK_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/AK/20260312_AK_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/AKP/20260216_AKP_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/AKP/20260226_AKP_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/AKPS/20260217_AKPS_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/AKPS/20260223_AKPS_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/AKPS/20260310_AKPS_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/NCO/20250722_NCO_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/NCO/20250804_NCO_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/NCO/20250908_NCO_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/NCO/20251202_NCO_images_rescaled_cropped",
+    "/scratch/koddenbrock/AKPS_Progression_Organoids/NCO/20251216_NCO_images_rescaled_cropped",
+    "/scratch/koddenbrock/Organoids/20231108_P021N_40xSil_Hoechst_SiRActin/images_cropped_isotropic",
+    "/scratch/koddenbrock/Organoids/20240220_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic",
+    "/scratch/koddenbrock/Organoids/20240305_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic",
+    "/scratch/koddenbrock/Organoids/20241009_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic",
+    "/scratch/koddenbrock/Organoids/20241023_P021N_25xSil_Hoechst_SirActin/images_cropped_isotropic",
+    "/scratch/koddenbrock/Organoids/unlabeled/20231108_Organoids_P021N",
+    "/scratch/koddenbrock/Organoids/unlabeled/20240220_Organoids_P013/cropped_isotropic_images",
+    "/scratch/koddenbrock/Organoids/unlabeled/20240305_Organoids_P013T/cropped_isotropic_images",
+    "/scratch/koddenbrock/Organoids/unlabeled/20241009_Organoids_P013T/cropped_isotropic_images",
+    "/scratch/koddenbrock/Organoids/unlabeled/20241023_Organoids_P021N/cropped_isotropic_images",
+    "/scratch/koddenbrock/Organoids_for_autosegmentation/20231108_Organoids_P021N/cropped_isotropic_images",
+    "/scratch/koddenbrock/Organoids_for_autosegmentation/20240220_Organoids_P013T/cropped_isotropic_images",
+    "/scratch/koddenbrock/Organoids_for_autosegmentation/20240305_Organoids_P013T/cropped_isotropic_images",
+    "/scratch/koddenbrock/Organoids_for_autosegmentation/20241009_Organoids_P013T/cropped_isotropic_images",
+    "/scratch/koddenbrock/Organoids_for_autosegmentation/20241023_Organoids_P021N/cropped_isotropic_images"
+  ],
+  "output": {
+    "models_dir": "",
+    "predictions_dir": "/scratch/koddenbrock/predictions"
+  }
+}
