@@ -14,6 +14,7 @@ import itertools
 import json
 import logging
 import os
+import shutil
 import time
 
 from cellpose import models, train
@@ -162,15 +163,9 @@ def run_trial(
             sign = "+" if delta >= 0 else ""
             logging.info(f"  [{label}] AP@{th:.2f}  {ap_before[th]:.4f} -> {ap_after[th]:.4f}  ({sign}{delta:.4f})")
 
-    # Clean up trial model file to save disk space
-    try:
-        if os.path.isfile(model_path):
-            os.remove(model_path)
-    except OSError:
-        pass
-
     return {
         "trial_idx": trial_idx,
+        "model_path": str(model_path),
         "hparams": trial,
         "train_loss_final": float(train_losses[-1]),
         "train_time_s": round(elapsed, 1),
@@ -240,6 +235,131 @@ def print_summary(results: list[dict], primary_metric: str):
 
 
 # ---------------------------------------------------------------------------
+# Post-HPO: model selection, promotion, test evaluation, predict config
+# ---------------------------------------------------------------------------
+
+def select_top_models(results: list[dict], top_models_cfg: dict) -> list[dict]:
+    """Return the union of top-N models for each metric, deduplicated by trial_idx."""
+    selected: dict[int, dict] = {}
+    for metric_key, n in top_models_cfg.items():
+        ranked = sorted(
+            [r for r in results if r.get("model_path")],
+            key=lambda r: score_result(r, metric_key),
+            reverse=True,
+        )
+        for r in ranked[:n]:
+            idx = r["trial_idx"]
+            if idx not in selected:
+                selected[idx] = dict(r)
+                selected[idx]["selected_for"] = [metric_key]
+            else:
+                selected[idx]["selected_for"].append(metric_key)
+    return list(selected.values())
+
+
+def promote_best_models(selected: list[dict], results_dir: str, hparam_best_dir: str) -> list[dict]:
+    """Move selected model files to hparam_best_dir/models/ and delete the rest."""
+    src_models_dir = os.path.join(results_dir, "models")
+    dst_models_dir = os.path.join(hparam_best_dir, "models")
+    os.makedirs(dst_models_dir, exist_ok=True)
+
+    selected_src_paths = {r.get("model_path") for r in selected}
+
+    for r in selected:
+        src = r.get("model_path")
+        if src and os.path.isfile(src):
+            name = os.path.basename(src)
+            dst = os.path.join(dst_models_dir, name)
+            shutil.move(src, dst)
+            r["model_path"] = dst
+            logging.info(f"Promoted {name} -> {dst_models_dir}")
+        else:
+            logging.warning(f"Model file not found for trial {r['trial_idx']}: {src}")
+
+    if os.path.isdir(src_models_dir):
+        for fname in os.listdir(src_models_dir):
+            fpath = os.path.join(src_models_dir, fname)
+            if os.path.isfile(fpath) and fpath not in selected_src_paths:
+                os.remove(fpath)
+                logging.info(f"Deleted non-selected model {fname}")
+
+    return selected
+
+
+def evaluate_on_test(
+    selected: list[dict],
+    test_images, test_masks, test_volumes,
+    device, use_bfloat16: bool,
+):
+    """Evaluate each selected model on the held-out test set; store results in-place."""
+    for r in selected:
+        model_path = r.get("model_path")
+        if not model_path or not os.path.isfile(model_path):
+            logging.warning(f"Skipping test eval for trial {r['trial_idx']}: file not found")
+            continue
+
+        finetuned = models.CellposeModel(
+            pretrained_model=model_path, device=device, use_bfloat16=use_bfloat16,
+        )
+
+        test_2d, test_3d = {}, {}
+        if test_images:
+            test_2d, _ = evaluate_model(finetuned, test_images, test_masks)
+        if test_volumes:
+            test_3d, _ = evaluate_model_3d(finetuned, test_volumes)
+
+        r["test_ap_2d"] = {str(k): v for k, v in test_2d.items()}
+        r["test_ap_3d"] = {str(k): v for k, v in test_3d.items()}
+
+        logging.info(f"\nTest set — {os.path.basename(model_path)} (trial {r['trial_idx']}):")
+        if test_2d:
+            logging.info("  2D: " + "  ".join(f"AP@{t:.2f}={v:.4f}" for t, v in sorted(test_2d.items())))
+        if test_3d:
+            logging.info("  3D: " + "  ".join(f"AP@{t:.2f}={v:.4f}" for t, v in sorted(test_3d.items())))
+
+        del finetuned
+
+
+def write_predict_config(
+    selected: list[dict],
+    hparam_best_dir: str,
+    predict_all_config_output: str,
+):
+    """Fill the models section of the predict-all config with the best model names."""
+    if os.path.isfile(predict_all_config_output):
+        with open(predict_all_config_output) as f:
+            config = json.load(f)
+    else:
+        config = {}
+        logging.warning(f"predict_all config template not found at {predict_all_config_output}; creating minimal file")
+
+    model_entries = []
+    for r in selected:
+        name = os.path.basename(r["model_path"])
+        hp = r.get("hparams", {})
+        entry = {
+            "name": name,
+            "base_model": "cpsam",
+            "freeze_encoder": hp.get("freeze_encoder", True),
+            "n_epochs": hp.get("n_epochs"),
+            "learning_rate": hp.get("learning_rate"),
+            "weight_decay": hp.get("weight_decay"),
+            "selected_for": r.get("selected_for", []),
+        }
+        if r.get("test_ap_3d"):
+            entry["test_metrics_3d"] = r["test_ap_3d"]
+        model_entries.append(entry)
+
+    config["models"] = model_entries
+    config.setdefault("output", {})["models_dir"] = hparam_best_dir
+
+    os.makedirs(os.path.dirname(os.path.abspath(predict_all_config_output)), exist_ok=True)
+    with open(predict_all_config_output, "w") as f:
+        json.dump(config, f, indent=2)
+    logging.info(f"Predict config written to {predict_all_config_output}")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -266,8 +386,12 @@ def main():
     logging.info(f"Using device: {device}")
 
     search_cfg = load_search_config(args.config)
+    logging.info(f"Loading config file: {args.config}")
+    logging.info(f"Loading search config: {search_cfg}")
+
     base_cfg = load_finetune_config(search_cfg["base_config"])
     primary_metric = search_cfg.get("primary_metric", "2d_ap_0.75")
+    logging.info(f"Primary metric: {primary_metric}")
 
     results_dir = search_cfg["output"]["results_dir"]
     results_json = search_cfg["output"]["results_json"]
@@ -320,6 +444,22 @@ def main():
         slice_axes=slice_axes,
     )
     logging.info(f"Eval set: {len(eval_images)} slices, {len(eval_volumes)} 3D volumes")
+
+    test_images, test_masks, test_volumes = [], [], []
+    test_dirs = data_cfg.get("test_image_dirs", [])
+    if test_dirs:
+        logging.info("Collecting held-out test pairs...")
+        test_pairs = collect_image_mask_pairs(test_dirs, data_cfg["gt_mapping"])
+        logging.info(f"Found {len(test_pairs)} test pairs")
+        if test_pairs:
+            logging.info("Loading and slicing test data...")
+            test_images, test_masks, test_volumes = load_and_slice_pairs(
+                test_pairs,
+                min_masks_per_slice=training_cfg["min_masks_per_slice"],
+                min_pixels=training_cfg["min_pixels"],
+                slice_axes=slice_axes,
+            )
+            logging.info(f"Test set: {len(test_images)} slices, {len(test_volumes)} 3D volumes")
 
     if not train_images:
         logging.error("No training slices found. Check config paths.")
@@ -398,6 +538,32 @@ def main():
         logging.info(json.dumps(best_hparams, indent=2))
     else:
         logging.warning("No successful trials to summarize.")
+
+    # ------------------------------------------------------------------
+    # Select best models, promote to hparam_best_dir, evaluate on test set
+    # ------------------------------------------------------------------
+    top_models_cfg = search_cfg.get("top_models", {})
+    hparam_best_dir = search_cfg["output"].get("hparam_best_dir")
+    predict_all_config_output = search_cfg["output"].get("predict_all_config_output")
+
+    if top_models_cfg and hparam_best_dir and valid_results:
+        logging.info(f"\nSelecting best models per metric: {top_models_cfg}")
+        selected = select_top_models(valid_results, top_models_cfg)
+        logging.info(f"Selected {len(selected)} unique models: trials {sorted(r['trial_idx'] for r in selected)}")
+
+        selected = promote_best_models(selected, results_dir, hparam_best_dir)
+
+        if test_images or test_volumes:
+            logging.info("\nEvaluating best models on held-out test set...")
+            evaluate_on_test(selected, test_images, test_masks, test_volumes, device, use_bfloat16)
+
+        if predict_all_config_output:
+            write_predict_config(selected, hparam_best_dir, predict_all_config_output)
+
+        # Persist test metrics in results JSON
+        with open(results_json, "w") as f:
+            json.dump(all_results, f, indent=2)
+        logging.info(f"Final results (with test metrics) saved to {results_json}")
 
 
 if __name__ == "__main__":
