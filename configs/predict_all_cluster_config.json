@@ -1,7 +1,12 @@
 {
-  "description": "Predict nuclei masks on ALL organoid data (AKPS_Progression + Organoids + Organoids_for_autosegmentation) using the best finetuned models. models[] and output.models_dir are filled automatically by hparam_search_nuclei.py after HPO.",
+  "description": "Evaluate the best finetuned models on all organoid data (AKPS_Progression + Organoids + Organoids_for_autosegmentation). models[] and output.models_dir are filled by hparam_search_nuclei.py after HPO.",
   "base_config": "/home/cluster_home/koddenb/workspace/organoid_segmentation/configs/finetune_nuclei_cluster_config.json",
   "models": [],
+  "gt_mapping": {
+    "replace": [["images_cropped_isotropic", "labelmaps/Nuclei"]],
+    "suffix": "_nuclei-labels.tif",
+    "img_suffix": ".tif"
+  },
   "predict_dirs": [
     "/scratch/koddenbrock/AKPS_Progression_Organoids/A/20260305_A_images_rescaled_cropped",
     "/scratch/koddenbrock/AKPS_Progression_Organoids/A/20260316_A_images_rescaled_cropped",
@@ -24,11 +29,6 @@
     "/scratch/koddenbrock/Organoids/20240305_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic",
     "/scratch/koddenbrock/Organoids/20241009_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic",
     "/scratch/koddenbrock/Organoids/20241023_P021N_25xSil_Hoechst_SirActin/images_cropped_isotropic",
-    "/scratch/koddenbrock/Organoids/unlabeled/20231108_Organoids_P021N",
-    "/scratch/koddenbrock/Organoids/unlabeled/20240220_Organoids_P013/cropped_isotropic_images",
-    "/scratch/koddenbrock/Organoids/unlabeled/20240305_Organoids_P013T/cropped_isotropic_images",
-    "/scratch/koddenbrock/Organoids/unlabeled/20241009_Organoids_P013T/cropped_isotropic_images",
-    "/scratch/koddenbrock/Organoids/unlabeled/20241023_Organoids_P021N/cropped_isotropic_images",
     "/scratch/koddenbrock/Organoids_for_autosegmentation/20231108_Organoids_P021N/cropped_isotropic_images",
     "/scratch/koddenbrock/Organoids_for_autosegmentation/20240220_Organoids_P013T/cropped_isotropic_images",
     "/scratch/koddenbrock/Organoids_for_autosegmentation/20240305_Organoids_P013T/cropped_isotropic_images",
@@ -37,6 +37,7 @@
   ],
   "output": {
     "models_dir": "",
-    "predictions_dir": "/scratch/koddenbrock/predictions"
+    "predictions_dir": "/scratch/koddenbrock/results/predictions",
+    "reports_dir": "/scratch/koddenbrock/results/reports"
   }
 }
