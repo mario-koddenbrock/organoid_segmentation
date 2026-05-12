@@ -3,14 +3,20 @@
   "base_config": "/home/cluster_home/koddenb/workspace/organoid_segmentation/configs/finetune_nuclei_cluster_config.json",
   "search": {
     "n_epochs": [50, 100, 200],
-    "learning_rate": [1e-5, 1e-4, 5e-4],
-    "weight_decay": [1e-5, 1e-4, 1e-3],
+    "learning_rate": [1e-3, 5e-3, 1e-4, 5e-4, 1e-5, 5e-5],
+    "weight_decay": [1e-5, 1e-4, 1e-3, 1e-2],
     "freeze_encoder": [true, false],
     "batch_size": [8]
   },
   "output": {
     "results_dir": "/home/cluster_home/koddenb/workspace/organoid_segmentation/results/hparam_search",
-    "results_json": "/home/cluster_home/koddenb/workspace/organoid_segmentation/results/hparam_search/results.json"
+    "results_json": "/home/cluster_home/koddenb/workspace/organoid_segmentation/results/hparam_search/results.json",
+    "hparam_best_dir": "/home/cluster_home/koddenb/workspace/organoid_segmentation/models/hparam_best",
+    "predict_all_config_output": "/home/cluster_home/koddenb/workspace/organoid_segmentation/configs/predict_all_cluster_config.json"
   },
-  "primary_metric": "3d_ap_0.75"
+  "primary_metric": "3d_ap_0.75",
+  "top_models": {
+    "3d_ap_0.75": 2,
+    "3d_ap_0.90": 2
+  }
 }
