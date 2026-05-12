@@ -1,16 +1,29 @@
 {
-  "description": "Finetuning configuration for CellposeSAM on 3D organoid nuclei (40x, cluster).",
+  "description": "Finetuning configuration for CellposeSAM on 3D organoid nuclei (40x, cluster). Training and eval are specified at the individual image level.",
   "data": {
-    "train_image_dirs": [
-      "/scratch/koddenbrock/Organoids/20231108_P021N_40xSil_Hoechst_SiRActin/images_cropped_isotropic",
-      "/scratch/koddenbrock/Organoids/20240220_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic",
-      "/scratch/koddenbrock/Organoids/20240305_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic"
+    "train_image_files": [
+      "/scratch/koddenbrock/Organoids/20231108_P021N_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20231108_P021N_A003_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20240220_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20240220_P013T_A001a_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20240220_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20240220_P013T_A004a_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20240220_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20240220_P013T_A005a_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20240305_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20240305_P013T_A001_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20240305_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20240305_P013T_A003_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20240305_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20240305_P013T_A006a_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20240305_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20240305_P013T_B005_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20240305_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20240305_P013T_B007a_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20241009_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20241009_P013T_A001a_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20241009_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20241009_P013T_A002a_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20241009_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20241009_P013T_A003a_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20241009_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20241009_P013T_A005_cropped_isotropic.tif"
     ],
-    "eval_image_dirs": [
-      "/scratch/koddenbrock/Organoids/20241009_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic"
-    ],
-    "test_image_dirs": [
-      "/scratch/koddenbrock/Organoids/20241023_P021N_25xSil_Hoechst_SirActin/images_cropped_isotropic"
+    "eval_image_files": [
+      "/scratch/koddenbrock/Organoids/20231108_P021N_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20231108_P021N_A005_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20231108_P021N_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20231108_P021N_A006_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20231108_P021N_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20231108_P021N_A012a_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20231108_P021N_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20231108_P021N_B001_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20231108_P021N_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20231108_P021N_B004a_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20231108_P021N_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20231108_P021N_B008a_cropped_isotropic.tif",
+      "/scratch/koddenbrock/Organoids/20231108_P021N_40xSil_Hoechst_SiRActin/images_cropped_isotropic/20231108_P021N_B009a_cropped_isotropic.tif"
     ],
     "gt_mapping": {
       "replace": [["images_cropped_isotropic", "labelmaps/Nuclei"]],
