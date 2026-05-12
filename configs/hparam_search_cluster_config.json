@@ -9,9 +9,9 @@
     "batch_size": [8]
   },
   "output": {
-    "results_dir": "/home/cluster_home/koddenb/workspace/organoid_segmentation/results/hparam_search",
-    "results_json": "/home/cluster_home/koddenb/workspace/organoid_segmentation/results/hparam_search/results.json",
-    "hparam_best_dir": "/home/cluster_home/koddenb/workspace/organoid_segmentation/models/hparam_best",
+    "results_dir": "/scratch/koddenbrock/results/hparam_search",
+    "results_json": "/scratch/koddenbrock/results/hparam_search/results.json",
+    "hparam_best_dir": "/scratch/koddenbrock/results",
     "predict_all_config_output": "/home/cluster_home/koddenb/workspace/organoid_segmentation/configs/predict_all_cluster_config.json"
   },
   "primary_metric": "3d_ap_0.75",
