@@ -286,40 +286,6 @@ def promote_best_models(selected: list[dict], results_dir: str, hparam_best_dir:
     return selected
 
 
-def evaluate_on_test(
-    selected: list[dict],
-    test_images, test_masks, test_volumes,
-    device, use_bfloat16: bool,
-):
-    """Evaluate each selected model on the held-out test set; store results in-place."""
-    for r in selected:
-        model_path = r.get("model_path")
-        if not model_path or not os.path.isfile(model_path):
-            logging.warning(f"Skipping test eval for trial {r['trial_idx']}: file not found")
-            continue
-
-        finetuned = models.CellposeModel(
-            pretrained_model=model_path, device=device, use_bfloat16=use_bfloat16,
-        )
-
-        test_2d, test_3d = {}, {}
-        if test_images:
-            test_2d, _ = evaluate_model(finetuned, test_images, test_masks)
-        if test_volumes:
-            test_3d, _ = evaluate_model_3d(finetuned, test_volumes)
-
-        r["test_ap_2d"] = {str(k): v for k, v in test_2d.items()}
-        r["test_ap_3d"] = {str(k): v for k, v in test_3d.items()}
-
-        logging.info(f"\nTest set — {os.path.basename(model_path)} (trial {r['trial_idx']}):")
-        if test_2d:
-            logging.info("  2D: " + "  ".join(f"AP@{t:.2f}={v:.4f}" for t, v in sorted(test_2d.items())))
-        if test_3d:
-            logging.info("  3D: " + "  ".join(f"AP@{t:.2f}={v:.4f}" for t, v in sorted(test_3d.items())))
-
-        del finetuned
-
-
 def write_predict_config(
     selected: list[dict],
     hparam_best_dir: str,
@@ -419,12 +385,15 @@ def main():
     axis_map = {"Z": 0, "Y": 1, "X": 2}
     slice_axes = tuple(axis_map[a.upper()] for a in training_cfg.get("slice_axes", ["Z"]))
 
-    logging.info("Collecting training pairs...")
-    train_pairs = collect_image_mask_pairs(data_cfg["train_image_dirs"], data_cfg["gt_mapping"])
+    train_sources = data_cfg.get("train_image_files") or data_cfg.get("train_image_dirs", [])
+    eval_sources = data_cfg.get("eval_image_files") or data_cfg.get("eval_image_dirs", [])
+
+    logging.info(f"Collecting training pairs from {len(train_sources)} source(s)...")
+    train_pairs = collect_image_mask_pairs(train_sources, data_cfg["gt_mapping"])
     logging.info(f"Found {len(train_pairs)} training pairs")
 
-    logging.info("Collecting eval pairs...")
-    eval_pairs = collect_image_mask_pairs(data_cfg["eval_image_dirs"], data_cfg["gt_mapping"])
+    logging.info(f"Collecting eval pairs from {len(eval_sources)} source(s)...")
+    eval_pairs = collect_image_mask_pairs(eval_sources, data_cfg["gt_mapping"])
     logging.info(f"Found {len(eval_pairs)} eval pairs")
 
     logging.info("Loading and slicing training data...")
@@ -444,22 +413,6 @@ def main():
         slice_axes=slice_axes,
     )
     logging.info(f"Eval set: {len(eval_images)} slices, {len(eval_volumes)} 3D volumes")
-
-    test_images, test_masks, test_volumes = [], [], []
-    test_dirs = data_cfg.get("test_image_dirs", [])
-    if test_dirs:
-        logging.info("Collecting held-out test pairs...")
-        test_pairs = collect_image_mask_pairs(test_dirs, data_cfg["gt_mapping"])
-        logging.info(f"Found {len(test_pairs)} test pairs")
-        if test_pairs:
-            logging.info("Loading and slicing test data...")
-            test_images, test_masks, test_volumes = load_and_slice_pairs(
-                test_pairs,
-                min_masks_per_slice=training_cfg["min_masks_per_slice"],
-                min_pixels=training_cfg["min_pixels"],
-                slice_axes=slice_axes,
-            )
-            logging.info(f"Test set: {len(test_images)} slices, {len(test_volumes)} 3D volumes")
 
     if not train_images:
         logging.error("No training slices found. Check config paths.")
@@ -552,10 +505,6 @@ def main():
         logging.info(f"Selected {len(selected)} unique models: trials {sorted(r['trial_idx'] for r in selected)}")
 
         selected = promote_best_models(selected, results_dir, hparam_best_dir)
-
-        if test_images or test_volumes:
-            logging.info("\nEvaluating best models on held-out test set...")
-            evaluate_on_test(selected, test_images, test_masks, test_volumes, device, use_bfloat16)
 
         if predict_all_config_output:
             write_predict_config(selected, hparam_best_dir, predict_all_config_output)
