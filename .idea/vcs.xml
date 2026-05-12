@@ -2,6 +2,7 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
+    <mapping directory="$USER_HOME$/Library/CloudStorage/OneDrive-Personal/HTW/Overleaf/Organoids" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/../cellpose-adapt/src/cellpose" vcs="Git" />
   </component>
 </project>
