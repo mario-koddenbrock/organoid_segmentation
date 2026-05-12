@@ -57,47 +57,60 @@ def load_finetune_config(path: str) -> dict:
 # Data collection
 # ---------------------------------------------------------------------------
 
-def collect_image_mask_pairs(image_dirs, gt_mapping):
-    """
-    Collect (image_path, mask_path) pairs from a list of full image directory paths.
-    GT paths are derived from each image path using gt_mapping rules.
-    Directories or individual images without a matching GT are skipped.
-    """
+def _derive_gt_path(img_path: str, gt_mapping: dict) -> str:
+    """Derive the GT label path for a single image file using gt_mapping rules."""
+    img_dir = os.path.dirname(img_path)
+    img_file = os.path.basename(img_path)
+    gt_dir = img_dir
+    for old, new in gt_mapping.get("replace", []):
+        gt_dir = gt_dir.replace(old, new)
     img_suffix = gt_mapping.get("img_suffix", ".tif")
     gt_suffix = gt_mapping.get("suffix", "_nuclei-labels.tif")
-    replacements = gt_mapping.get("replace", [])
+    base_name = img_file[:-len(img_suffix)] if img_file.endswith(img_suffix) else img_file
+    return os.path.join(gt_dir, base_name + gt_suffix)
 
+
+def collect_image_mask_pairs(dirs_or_files, gt_mapping):
+    """
+    Collect (image_path, mask_path) pairs from a mixed list of:
+      - directory paths  → all .tif files in that dir are included
+      - individual .tif file paths → just that file is included
+
+    GT paths are derived using gt_mapping rules. Entries without a matching
+    GT file are skipped with a warning.
+    """
     pairs = []
-    for image_dir in image_dirs:
-        if not os.path.isdir(image_dir):
-            logging.warning(f"Image directory not found, skipping: {image_dir}")
-            continue
+    for entry in dirs_or_files:
+        if os.path.isfile(entry):
+            gt_path = _derive_gt_path(entry, gt_mapping)
+            if os.path.isfile(gt_path):
+                pairs.append((entry, gt_path))
+            else:
+                logging.warning(f"No GT found for {os.path.basename(entry)}, expected: {gt_path}")
 
-        # Derive the GT directory by applying path replacements to the image dir
-        gt_dir = image_dir
-        for old, new in replacements:
-            gt_dir = gt_dir.replace(old, new)
+        elif os.path.isdir(entry):
+            gt_dir = entry
+            for old, new in gt_mapping.get("replace", []):
+                gt_dir = gt_dir.replace(old, new)
 
-        image_files = sorted([
-            f for f in os.listdir(image_dir) if f.endswith((".tif", ".tiff"))
-        ])
+            img_suffix = gt_mapping.get("img_suffix", ".tif")
+            gt_suffix = gt_mapping.get("suffix", "_nuclei-labels.tif")
+            image_files = sorted(f for f in os.listdir(entry) if f.endswith((".tif", ".tiff")))
 
-        dir_pairs = []
-        for img_file in image_files:
-            base_name = img_file
-            if base_name.endswith(img_suffix):
-                base_name = base_name[:-len(img_suffix)]
-            gt_file = base_name + gt_suffix
-            gt_path = os.path.join(gt_dir, gt_file)
+            dir_pairs = []
+            for img_file in image_files:
+                base_name = img_file[:-len(img_suffix)] if img_file.endswith(img_suffix) else img_file
+                gt_path = os.path.join(gt_dir, base_name + gt_suffix)
+                if not os.path.isfile(gt_path):
+                    logging.warning(f"No GT found for {img_file}, expected: {gt_path}")
+                    continue
+                dir_pairs.append((os.path.join(entry, img_file), gt_path))
 
-            if not os.path.isfile(gt_path):
-                logging.warning(f"No nuclei mask found for {img_file}, expected: {gt_path}")
-                continue
+            logging.info(f"Found {len(dir_pairs)} pairs in: {entry}")
+            pairs.extend(dir_pairs)
 
-            dir_pairs.append((os.path.join(image_dir, img_file), gt_path))
-
-        logging.info(f"Found {len(dir_pairs)} pairs in: {image_dir}")
-        pairs.extend(dir_pairs)
+        else:
+            logging.warning(f"Not a file or directory, skipping: {entry}")
 
     return pairs
 
@@ -370,17 +383,17 @@ def main():
     training_cfg = cfg["training"]
     model_cfg = cfg["model"]
 
-    train_image_dirs = data_cfg["train_image_dirs"]
-    eval_image_dirs = data_cfg["eval_image_dirs"]
     gt_mapping = data_cfg["gt_mapping"]
+    train_sources = data_cfg.get("train_image_files") or data_cfg.get("train_image_dirs", [])
+    eval_sources = data_cfg.get("eval_image_files") or data_cfg.get("eval_image_dirs", [])
 
     # 1. Collect image/mask pairs per split
-    logging.info(f"Collecting training pairs from {len(train_image_dirs)} director(ies)...")
-    train_pairs = collect_image_mask_pairs(train_image_dirs, gt_mapping)
+    logging.info(f"Collecting training pairs from {len(train_sources)} source(s)...")
+    train_pairs = collect_image_mask_pairs(train_sources, gt_mapping)
     logging.info(f"Found {len(train_pairs)} training image/mask pairs")
 
-    logging.info(f"Collecting eval pairs from {len(eval_image_dirs)} director(ies)...")
-    eval_pairs = collect_image_mask_pairs(eval_image_dirs, gt_mapping)
+    logging.info(f"Collecting eval pairs from {len(eval_sources)} source(s)...")
+    eval_pairs = collect_image_mask_pairs(eval_sources, gt_mapping)
     logging.info(f"Found {len(eval_pairs)} eval image/mask pairs")
 
     if not train_pairs:
