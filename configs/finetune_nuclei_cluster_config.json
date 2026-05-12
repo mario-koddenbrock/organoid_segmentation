@@ -9,6 +9,9 @@
     "eval_image_dirs": [
       "/scratch/koddenbrock/Organoids/20241009_P013T_40xSil_Hoechst_SiRActin/images_cropped_isotropic"
     ],
+    "test_image_dirs": [
+      "/scratch/koddenbrock/Organoids/20241023_P021N_25xSil_Hoechst_SirActin/images_cropped_isotropic"
+    ],
     "gt_mapping": {
       "replace": [["images_cropped_isotropic", "labelmaps/Nuclei"]],
       "suffix": "_nuclei-labels.tif",
