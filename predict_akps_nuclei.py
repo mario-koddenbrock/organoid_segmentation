@@ -246,18 +246,18 @@ def write_summary(model_cfg: dict, leaf_dirs: list, predictions_dir: str, report
         # Training data section
         if base_cfg and "data" in base_cfg:
             data_cfg = base_cfg["data"]
-            train_dirs = data_cfg.get("train_image_dirs", [])
-            eval_dirs = data_cfg.get("eval_image_dirs", [])
+            train_sources = data_cfg.get("train_image_files") or data_cfg.get("train_image_dirs", [])
+            eval_sources = data_cfg.get("eval_image_files") or data_cfg.get("eval_image_dirs", [])
             lines += [f"## Training Data", f""]
-            if train_dirs:
-                lines.append(f"**Training:**")
-                for d in train_dirs:
-                    lines.append(f"- `{os.path.basename(os.path.dirname(d))}`")
+            if train_sources:
+                lines.append(f"**Training ({len(train_sources)} images):**")
+                for src in train_sources:
+                    lines.append(f"- `{os.path.basename(src)}`")
                 lines.append(f"")
-            if eval_dirs:
-                lines.append(f"**Evaluation (held-out):**")
-                for d in eval_dirs:
-                    lines.append(f"- `{os.path.basename(os.path.dirname(d))}`")
+            if eval_sources:
+                lines.append(f"**Eval ({len(eval_sources)} images):**")
+                for src in eval_sources:
+                    lines.append(f"- `{os.path.basename(src)}`")
                 lines.append(f"")
 
         # Expected metrics from hparam search if present
@@ -371,8 +371,10 @@ def main():
         slice_axes = tuple(axis_map[a.upper()] for a in training_cfg.get("slice_axes", ["Z"]))
 
         logging.info("Collecting training pairs...")
-        train_pairs = collect_image_mask_pairs(data_cfg["train_image_dirs"], data_cfg["gt_mapping"])
-        eval_pairs = collect_image_mask_pairs(data_cfg["eval_image_dirs"], data_cfg["gt_mapping"])
+        train_sources = data_cfg.get("train_image_files") or data_cfg.get("train_image_dirs", [])
+        eval_sources = data_cfg.get("eval_image_files") or data_cfg.get("eval_image_dirs", [])
+        train_pairs = collect_image_mask_pairs(train_sources, data_cfg["gt_mapping"])
+        eval_pairs = collect_image_mask_pairs(eval_sources, data_cfg["gt_mapping"])
 
         logging.info("Loading and slicing training data...")
         train_images, train_masks, _ = load_and_slice_pairs(
