@@ -24,7 +24,7 @@ import numpy as np
 from cellpose import metrics, models, train
 from tifffile import imread
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(funcName)s: %(message)s")
 
 
 # ---------------------------------------------------------------------------

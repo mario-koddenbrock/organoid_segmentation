@@ -29,7 +29,7 @@ from finetune_nuclei import (
     load_finetune_config,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(funcName)s: %(message)s")
 
 METRIC_KEY_MAP = {
     "2d_ap_0.50": ("2d", 0.5),
