@@ -33,7 +33,7 @@ from finetune_nuclei import (
 )
 from predict_akps_nuclei import collect_explicit_dirs, predict_volume
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(funcName)s: %(message)s")
 logging.getLogger("cellpose").setLevel(logging.WARNING)
 
 THRESHOLDS = [0.5, 0.75, 0.9]
