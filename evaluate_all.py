@@ -136,7 +136,7 @@ def write_reports(all_results: dict, reports_dir: str):
         "",
     ]
 
-    for model_name, model_data in all_results.items():
+    for model_name, model_data in all_results["models"].items():
         lines += [f"MODEL: {model_name}", "-" * 60]
         if model_data.get("hparams"):
             hp = model_data["hparams"]
