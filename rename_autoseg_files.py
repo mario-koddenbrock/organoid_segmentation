@@ -9,10 +9,10 @@ Example:
     20231108_P021N_40xSil_..._A_001_cropped_isotropic.tif
 
 Usage (dry-run, prints what would change):
-    python rename_autoseg_files.py /scratch/koddenbrock/Organoids_for_autosegmentation
+    python rename_autoseg_files.py /scratch/koddenbrock/organoid_segmentation/Organoids_for_autosegmentation
 
 Apply renames:
-    python rename_autoseg_files.py /scratch/koddenbrock/Organoids_for_autosegmentation --apply
+    python rename_autoseg_files.py /scratch/koddenbrock/organoid_segmentation/Organoids_for_autosegmentation --apply
 """
 
 import argparse
