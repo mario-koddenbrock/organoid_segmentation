@@ -117,7 +117,7 @@ def process_directory(
 # ---------------------------------------------------------------------------
 
 def write_reports(all_results: dict, reports_dir: str):
-    """Write evaluation_summary.json and evaluation_summary.txt."""
+    """Write evaluation_summary.{json,txt,md}."""
     os.makedirs(reports_dir, exist_ok=True)
 
     # JSON
@@ -176,6 +176,72 @@ def write_reports(all_results: dict, reports_dir: str):
     with open(txt_path, "w") as f:
         f.write("\n".join(lines) + "\n")
     logging.info(f"Text report: {txt_path}")
+
+    # Markdown
+    md_path = os.path.join(reports_dir, "evaluation_summary.md")
+    md = [
+        "# Organoid Nuclei Segmentation — Evaluation Summary",
+        "",
+        f"_Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_",
+        "",
+    ]
+
+    # Overall comparison table across models
+    md += ["## Model comparison (mean 3D AP on GT images)", ""]
+    header = ["Model", "lr", "wd", "epochs", "frozen"] + [f"AP@{t:.2f}" for t in THRESHOLDS] + ["n"]
+    md.append("| " + " | ".join(header) + " |")
+    md.append("|" + "|".join(["---"] * len(header)) + "|")
+    for model_name, model_data in all_results["models"].items():
+        hp = model_data.get("hparams") or {}
+        eval_images = [
+            img for dir_data in model_data.get("dirs", {}).values()
+            for img in dir_data if img.get("has_gt")
+        ]
+        row = [
+            model_name,
+            f"{hp.get('learning_rate', float('nan')):.1e}" if hp.get("learning_rate") is not None else "?",
+            f"{hp.get('weight_decay', float('nan')):.1e}" if hp.get("weight_decay") is not None else "?",
+            str(hp.get("n_epochs", "?")),
+            str(hp.get("freeze_encoder", "?")),
+        ]
+        for th in THRESHOLDS:
+            vals = [img["ap_3d"][str(th)] for img in eval_images if str(th) in img.get("ap_3d", {})]
+            row.append(f"{(sum(vals)/len(vals)):.4f}" if vals else "—")
+        row.append(str(len(eval_images)))
+        md.append("| " + " | ".join(row) + " |")
+    md.append("")
+
+    # Per-model details
+    for model_name, model_data in all_results["models"].items():
+        md += [f"## {model_name}", ""]
+        hp = model_data.get("hparams") or {}
+        if hp:
+            md.append(
+                f"**Hyperparameters:** lr={hp.get('learning_rate', '?'):.1e}, "
+                f"wd={hp.get('weight_decay', '?'):.1e}, "
+                f"epochs={hp.get('n_epochs', '?')}, "
+                f"frozen={hp.get('freeze_encoder', '?')}"
+            )
+            md.append("")
+
+        md += ["### Per-directory breakdown", ""]
+        md.append("| Directory | Images | GT | AP@0.50 | AP@0.75 | AP@0.90 |")
+        md.append("|---|---|---|---|---|---|")
+        for dir_key, dir_images in model_data.get("dirs", {}).items():
+            gt_imgs = [img for img in dir_images if img.get("has_gt")]
+            cells = [dir_key, str(len(dir_images)), str(len(gt_imgs))]
+            if gt_imgs:
+                for th in THRESHOLDS:
+                    vals = [img["ap_3d"][str(th)] for img in gt_imgs if str(th) in img.get("ap_3d", {})]
+                    cells.append(f"{(sum(vals)/len(vals)):.4f}" if vals else "—")
+            else:
+                cells += ["—", "—", "—"]
+            md.append("| " + " | ".join(cells) + " |")
+        md.append("")
+
+    with open(md_path, "w") as f:
+        f.write("\n".join(md) + "\n")
+    logging.info(f"Markdown report: {md_path}")
 
 
 # ---------------------------------------------------------------------------
