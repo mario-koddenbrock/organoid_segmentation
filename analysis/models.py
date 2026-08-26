@@ -119,7 +119,7 @@ def tabfm_model():
     return TabFMClassifier(model=model)
 
 
-def autogluon_model(label_col="is_tumor", time_limit=180):
+def autogluon_model(label_col="is_tumor", time_limit=3600):
     """Returns a callable wrapper since AutoGluon's TabularPredictor needs a
     DataFrame with the label column attached, not a bare sklearn-style API.
 
