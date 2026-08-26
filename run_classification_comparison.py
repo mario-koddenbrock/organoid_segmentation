@@ -4,10 +4,20 @@ nucleus classification task, on both trial005 and trial028 segmentation datasets
 Grouped 5-fold CV (grouped by organoid) so nuclei from the same organoid never
 appear in both train and test.
 
+Every run scores ALL applicable evaluation levels from a single set of model fits
+(training is identical regardless of how predictions are later aggregated, so we
+don't waste GPU time re-training just to re-score):
+  - without --aggregate-organoid: both 'nucleus' (raw per-nucleus AUC) and
+    'organoid_pred_agg' (predicted probabilities meaned per organoid before scoring)
+  - with --aggregate-organoid: 'organoid_data_agg' only (features meaned per
+    organoid before training, so there's nothing left to aggregate post-hoc)
+Each eval level writes its own comparison_*_{perNucleus,predAgg,orglevel}.csv/plot.
+
 Usage:
     python run_classification_comparison.py
     python run_classification_comparison.py --models logreg tabpfn
     python run_classification_comparison.py --trials 005
+    python run_classification_comparison.py --exclude-25x --aggregate-organoid
 
 To parallelize across separate SLURM jobs (one fold+trial per job/GPU), run a
 single fold and merge afterwards:
@@ -40,31 +50,43 @@ FOLD_OUT_DIR = os.path.join(OUT_DIR, "folds")
 N_FOLDS = 5
 RANDOM_STATE = 0
 
+EVAL_LEVEL_SUFFIX = {
+    "nucleus": "perNucleus",
+    "organoid_pred_agg": "predAgg",
+    "organoid_data_agg": "orglevel",
+}
 
-def run_cv(model_name, X, y, groups, n_folds=N_FOLDS, only_fold=None,
-           aggregate_predictions=False):
-    """Run CV. If `groups` is None, X/y are already organoid-level (one row per
-    organoid) so plain StratifiedKFold is used. Otherwise GroupKFold on `groups`
-    (nucleus-level data, grouped by organoid to prevent leakage). If `only_fold`
-    is given, fit/evaluate only that one fold (used to parallelize folds across
-    separate SLURM jobs).
 
-    `aggregate_predictions`: train/predict at nucleus level as usual, but mean
-    the predicted probabilities per organoid before scoring AUC/ACC (requires
-    `groups`) — a third way to get an organoid-level metric, contrasted with
-    aggregating the *features* before training (see `aggregate_to_organoid_level`
-    in analysis/data.py)."""
-    if aggregate_predictions and groups is None:
-        raise ValueError("aggregate_predictions requires nucleus-level `groups`")
+def run_cv(model_name, X, y, groups, n_folds=N_FOLDS, only_fold=None):
+    """Run CV and score EVERY applicable evaluation level from a single set of
+    model fits (one fit per fold, not one fit per eval level — training is
+    identical regardless of how predictions are later aggregated, so scoring
+    multiple ways from the same fit avoids wasted duplicate training runs).
 
+    If `groups` is None, X/y are already organoid-level (one row per organoid,
+    i.e. features were aggregated before training) so plain StratifiedKFold is
+    used and the only eval level is 'organoid_data_agg'. Otherwise GroupKFold on
+    `groups` (nucleus-level data, grouped by organoid to prevent leakage) and
+    two eval levels are scored per fold: 'nucleus' (raw per-nucleus AUC) and
+    'organoid_pred_agg' (predicted probabilities meaned per organoid before
+    scoring — contrasted with aggregating the *features* before training, see
+    `aggregate_to_organoid_level` in analysis/data.py).
+
+    If `only_fold` is given, fit/evaluate only that one fold (used to
+    parallelize folds across separate SLURM jobs).
+
+    Returns {eval_level: (aucs, accs)}.
+    """
     if groups is None:
         cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=RANDOM_STATE)
         splits = cv.split(X, y)
+        eval_levels = ["organoid_data_agg"]
     else:
         cv = GroupKFold(n_splits=n_folds)
         splits = cv.split(X, y, groups)
+        eval_levels = ["nucleus", "organoid_pred_agg"]
 
-    aucs, accs = [], []
+    results = {lvl: ([], []) for lvl in eval_levels}
     for fold, (train_idx, test_idx) in enumerate(splits):
         if only_fold is not None and fold != only_fold:
             continue
@@ -80,7 +102,11 @@ def run_cv(model_name, X, y, groups, n_folds=N_FOLDS, only_fold=None,
         proba = model.predict_proba(X_test)
         proba_pos = proba[:, 1] if proba.ndim == 2 else proba
 
-        if aggregate_predictions:
+        fold_metrics = {}
+        if groups is None:
+            fold_metrics["organoid_data_agg"] = (y_test, proba_pos)
+        else:
+            fold_metrics["nucleus"] = (y_test, proba_pos)
             test_groups = groups[test_idx]
             pred_df = pd.DataFrame({
                 "organoid": test_groups, "proba": proba_pos, "y_true": y_test,
@@ -88,18 +114,20 @@ def run_cv(model_name, X, y, groups, n_folds=N_FOLDS, only_fold=None,
             per_organoid = pred_df.groupby("organoid").agg(
                 proba=("proba", "mean"), y_true=("y_true", "first")
             )
-            eval_y, eval_proba = per_organoid["y_true"].to_numpy(), per_organoid["proba"].to_numpy()
-        else:
-            eval_y, eval_proba = y_test, proba_pos
+            fold_metrics["organoid_pred_agg"] = (
+                per_organoid["y_true"].to_numpy(), per_organoid["proba"].to_numpy()
+            )
 
-        auc = roc_auc_score(eval_y, eval_proba)
-        acc = accuracy_score(eval_y, (eval_proba >= 0.5).astype(int))
-        aucs.append(auc)
-        accs.append(acc)
-        print(f"    fold {fold}: AUC={auc:.3f} ACC={acc:.3f} "
-              f"(n_train={len(train_idx)}, n_test={len(test_idx)})")
+        msg = f"    fold {fold} (n_train={len(train_idx)}, n_test={len(test_idx)}):"
+        for lvl, (eval_y, eval_proba) in fold_metrics.items():
+            auc = roc_auc_score(eval_y, eval_proba)
+            acc = accuracy_score(eval_y, (eval_proba >= 0.5).astype(int))
+            results[lvl][0].append(auc)
+            results[lvl][1].append(acc)
+            msg += f" [{lvl}] AUC={auc:.3f} ACC={acc:.3f}"
+        print(msg)
 
-    return np.array(aucs), np.array(accs)
+    return {lvl: (np.array(a), np.array(c)) for lvl, (a, c) in results.items()}
 
 
 def load_data(trial, exclude_25x=False, aggregate_organoid=False):
@@ -118,9 +146,9 @@ def load_data(trial, exclude_25x=False, aggregate_organoid=False):
     return X, y, groups, len(df), n_units
 
 
-def run_single_fold(trial, model_name, fold, exclude_25x=False, aggregate_organoid=False,
-                     aggregate_predictions=False):
-    """Run one (trial, model, fold) combination and write its own result CSV.
+def run_single_fold(trial, model_name, fold, exclude_25x=False, aggregate_organoid=False):
+    """Run one (trial, model, fold) combination and write its own result CSV
+    (one row per eval level scored from that single fit — see `run_cv`).
     Meant to be invoked as one task of a SLURM job array."""
     os.makedirs(FOLD_OUT_DIR, exist_ok=True)
     X, y, groups, n_rows, n_units = load_data(trial, exclude_25x, aggregate_organoid)
@@ -129,22 +157,23 @@ def run_single_fold(trial, model_name, fold, exclude_25x=False, aggregate_organo
 
     t0 = time.time()
     try:
-        aucs, accs = run_cv(model_name, X, y, groups, only_fold=fold,
-                             aggregate_predictions=aggregate_predictions)
-        auc, acc, status, err = aucs[0], accs[0], "ok", ""
+        cv_results = run_cv(model_name, X, y, groups, only_fold=fold)
+        rows = [
+            {"trial": trial, "model": model_name, "fold": fold, "eval_level": lvl,
+             "auc": aucs[0], "acc": accs[0], "status": "ok", "error": ""}
+            for lvl, (aucs, accs) in cv_results.items()
+        ]
     except Exception as exc:
         print(f"FAILED: {exc}")
         traceback.print_exc()
-        auc, acc, status, err = np.nan, np.nan, "failed", str(exc)
+        rows = [{"trial": trial, "model": model_name, "fold": fold, "eval_level": "unknown",
+                  "auc": np.nan, "acc": np.nan, "status": "failed", "error": str(exc)}]
     elapsed = time.time() - t0
+    for r in rows:
+        r["elapsed_sec"] = elapsed
 
-    row = pd.DataFrame([{
-        "trial": trial, "model": model_name, "fold": fold,
-        "auc": auc, "acc": acc, "status": status, "error": err,
-        "elapsed_sec": elapsed,
-    }])
     out_path = os.path.join(FOLD_OUT_DIR, f"{trial}_{model_name}_fold{fold}.csv")
-    row.to_csv(out_path, index=False)
+    pd.DataFrame(rows).to_csv(out_path, index=False)
     print(f"Saved {out_path}")
 
 
@@ -158,11 +187,12 @@ def merge_fold_results():
     df = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
 
     rows = []
-    for (trial, model_name), g in df.groupby(["trial", "model"]):
+    for (trial, model_name, eval_level), g in df.groupby(["trial", "model", "eval_level"]):
         ok = g[g["status"] == "ok"]
         rows.append({
             "trial": trial,
             "model": model_name,
+            "eval_level": eval_level,
             "auc_mean": ok["auc"].mean(),
             "auc_std": ok["auc"].std(),
             "acc_mean": ok["acc"].mean(),
@@ -172,11 +202,16 @@ def merge_fold_results():
             "error": "; ".join(g.loc[g["status"] != "ok", "error"].dropna().unique()),
             "elapsed_sec": g["elapsed_sec"].sum(),
         })
-    results = pd.DataFrame(rows).sort_values(["trial", "model"])
+    results = pd.DataFrame(rows).sort_values(["trial", "model", "eval_level"])
     os.makedirs(OUT_DIR, exist_ok=True)
-    results.to_csv(os.path.join(OUT_DIR, "comparison_merged.csv"), index=False)
-    print(results.to_string(index=False))
-    plot_results(results)
+    for lvl, suffix in EVAL_LEVEL_SUFFIX.items():
+        lvl_results = results[results["eval_level"] == lvl]
+        if lvl_results.empty:
+            continue
+        lvl_results.to_csv(os.path.join(OUT_DIR, f"comparison_merged_{suffix}.csv"), index=False)
+        print(f"\n=== Merged ({lvl}) ===")
+        print(lvl_results.to_string(index=False))
+        plot_results(lvl_results, suffix=f"_merged_{suffix}")
 
 
 def main():
@@ -194,11 +229,10 @@ def main():
     parser.add_argument("--aggregate-organoid", action="store_true",
                          help="Collapse to one row per organoid (mean features) instead "
                               "of per-nucleus rows, fixing pseudoreplication")
-    parser.add_argument("--aggregate-predictions", action="store_true",
-                         help="Train/predict at nucleus level, but mean predicted "
-                              "probabilities per organoid before scoring AUC/ACC")
     parser.add_argument("--output-suffix", default="",
-                         help="Suffix for output filenames, e.g. '_no25x_orglevel'")
+                         help="Prefix tag for output filenames, e.g. '_no25x'. The "
+                              "eval-level name (perNucleus/predAgg/orglevel) is "
+                              "appended automatically — see EVAL_LEVEL_SUFFIX.")
     args = parser.parse_args()
 
     if args.merge:
@@ -210,20 +244,15 @@ def main():
             "--fold requires exactly one --trials value and one --models value"
         )
         run_single_fold(args.trials[0], args.models[0], args.fold,
-                         args.exclude_25x, args.aggregate_organoid,
-                         args.aggregate_predictions)
+                         args.exclude_25x, args.aggregate_organoid)
         return
-
-    if args.aggregate_predictions and args.aggregate_organoid:
-        raise ValueError("--aggregate-predictions and --aggregate-organoid are mutually exclusive")
 
     os.makedirs(OUT_DIR, exist_ok=True)
     rows = []
 
     for trial in args.trials:
         print(f"\n=== trial {trial} (exclude_25x={args.exclude_25x}, "
-              f"aggregate_organoid={args.aggregate_organoid}, "
-              f"aggregate_predictions={args.aggregate_predictions}) ===")
+              f"aggregate_organoid={args.aggregate_organoid}) ===")
         X, y, groups, n_rows, n_units = load_data(
             trial, args.exclude_25x, args.aggregate_organoid
         )
@@ -234,42 +263,49 @@ def main():
             print(f"  -- model: {model_name}")
             t0 = time.time()
             try:
-                aucs, accs = run_cv(model_name, X, y, groups,
-                                     aggregate_predictions=args.aggregate_predictions)
-                status = "ok"
+                cv_results = run_cv(model_name, X, y, groups)
+                status_per_level = {lvl: "ok" for lvl in cv_results}
                 err = ""
             except Exception as exc:
                 print(f"    FAILED: {exc}")
                 traceback.print_exc()
-                aucs, accs = np.array([np.nan]), np.array([np.nan])
-                status = "failed"
+                cv_results = {lvl: (np.array([np.nan]), np.array([np.nan]))
+                               for lvl in (["organoid_data_agg"] if args.aggregate_organoid
+                                           else ["nucleus", "organoid_pred_agg"])}
+                status_per_level = {lvl: "failed" for lvl in cv_results}
                 err = str(exc)
             elapsed = time.time() - t0
 
-            rows.append({
-                "trial": trial,
-                "model": model_name,
-                "auc_mean": aucs.mean(),
-                "auc_std": aucs.std(),
-                "acc_mean": accs.mean(),
-                "acc_std": accs.std(),
-                "n_folds": len(aucs),
-                "status": status,
-                "error": err,
-                "elapsed_sec": elapsed,
-            })
-
-        trial_rows = [r for r in rows if r["trial"] == trial]
-        pd.DataFrame(trial_rows).to_csv(
-            os.path.join(OUT_DIR, f"comparison_{trial}{args.output_suffix}.csv"), index=False
-        )
+            for lvl, (aucs, accs) in cv_results.items():
+                rows.append({
+                    "trial": trial,
+                    "model": model_name,
+                    "eval_level": lvl,
+                    "auc_mean": aucs.mean(),
+                    "auc_std": aucs.std(),
+                    "acc_mean": accs.mean(),
+                    "acc_std": accs.std(),
+                    "n_folds": len(aucs),
+                    "status": status_per_level[lvl],
+                    "error": err,
+                    "elapsed_sec": elapsed,
+                })
 
     results = pd.DataFrame(rows)
-    results.to_csv(os.path.join(OUT_DIR, f"comparison_all{args.output_suffix}.csv"), index=False)
-    print("\n=== Summary ===")
-    print(results.to_string(index=False))
-
-    plot_results(results, suffix=args.output_suffix)
+    for lvl, suffix in EVAL_LEVEL_SUFFIX.items():
+        lvl_results = results[results["eval_level"] == lvl]
+        if lvl_results.empty:
+            continue
+        out_suffix = f"{args.output_suffix}_{suffix}"
+        for trial in args.trials:
+            trial_rows = lvl_results[lvl_results["trial"] == trial]
+            trial_rows.to_csv(
+                os.path.join(OUT_DIR, f"comparison_{trial}{out_suffix}.csv"), index=False
+            )
+        lvl_results.to_csv(os.path.join(OUT_DIR, f"comparison_all{out_suffix}.csv"), index=False)
+        print(f"\n=== Summary ({lvl}) ===")
+        print(lvl_results.to_string(index=False))
+        plot_results(lvl_results, suffix=out_suffix)
 
 
 def plot_results(results: pd.DataFrame, suffix=""):
