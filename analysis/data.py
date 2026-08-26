@@ -38,13 +38,24 @@ NON_FEATURE_COLUMNS = [
 ]
 
 
-def load_and_filter(csv_path: str) -> pd.DataFrame:
+def load_and_filter(csv_path: str, exclude_25x: bool = False) -> pd.DataFrame:
     """Load one trial's nucleus morphology CSV and apply Joshi's filters.
 
     Derives a binary label `is_tumor` (0 = P021N healthy, 1 = P013T tumor) from
     `img_name`.
+
+    `exclude_25x`: the batch `20241023` (P021N/healthy only) was imaged at 25x
+    while every other batch is 40x. Imaging date is a perfect proxy for class
+    label (each date belongs to exactly one class), and this magnification
+    outlier is a confirmed learnable non-biological shortcut (grouped-CV date
+    classifier reaches 91-96% accuracy vs. 50% chance within the healthy class
+    alone). Set True to drop it and get an apples-to-apples magnification
+    comparison between classes.
     """
     df = pd.read_csv(csv_path)
+
+    if exclude_25x:
+        df = df[df["magnification"] != "25x"]
 
     df = df[~df["img_name"].isin(BAD_IMAGES)]
 
@@ -88,3 +99,32 @@ def get_feature_matrix(df: pd.DataFrame):
     y = df["is_tumor"].to_numpy()
     groups = df["organoid"].to_numpy()
     return X, y, groups
+
+
+def aggregate_to_organoid_level(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse per-nucleus rows to one row per organoid (mean of numeric
+    features), fixing the pseudoreplication of treating ~30 correlated nuclei
+    from the same organoid as independent samples. Also removes within-organoid
+    noise, at the cost of shrinking the dataset to ~55 rows total.
+    """
+    feature_cols = [
+        c
+        for c in df.columns
+        if c not in NON_FEATURE_COLUMNS and c != "is_tumor" and c != "organoid"
+    ]
+    numeric = df[feature_cols].apply(pd.to_numeric, errors="coerce")
+    agg = numeric.groupby(df["organoid"]).mean()
+    agg["is_tumor"] = df.groupby("organoid")["is_tumor"].first()
+    agg["n_nuclei"] = df.groupby("organoid").size()
+    return agg.reset_index()
+
+
+def get_organoid_feature_matrix(agg_df: pd.DataFrame):
+    """Feature matrix for an organoid-level dataframe (one row = one organoid,
+    so plain StratifiedKFold is valid — no grouping needed)."""
+    feature_cols = [
+        c for c in agg_df.columns if c not in ("organoid", "is_tumor", "n_nuclei")
+    ]
+    X = agg_df[feature_cols]
+    y = agg_df["is_tumor"].to_numpy()
+    return X, y
