@@ -20,10 +20,23 @@ MIN_NUCLEI_PER_IMAGE = 10
 MIN_VOLUME_UM3 = 165.77
 SPHERICITY_SOLIDITY_THRESHOLD = 0.65
 
+# `ellipsoid_r_axis_major/medium/minor` and `area`/`area_convex` are stored as RAW
+# VOXEL values (no `_um` suffix), unlike `volume_um`/`surface_area_um`/
+# `distance_to_organoid_center_um` which are already correctly converted to physical
+# units (verified: `area * spacing_x_um * spacing_y_um * spacing_z_um == volume_um`
+# exactly). Comparing the raw axis columns directly across the 25x (20241023) and
+# 40x batches — which have different spacing_x_um (0.26 vs 0.324) — is comparing
+# different physical scales as if they were the same value. This produced a false
+# "+17%"/"91-96% batch-predictable" signal; ground-truth manual nuclei diameters
+# (see notebooks/classification_investigation.ipynb) show <1% real difference
+# between magnifications once correctly converted. RAW_AXIS_COLUMNS are corrected
+# to microns in `load_and_filter` (see `*_um` columns added there) and the raw
+# versions are excluded from the model feature matrix.
+RAW_AXIS_COLUMNS = ["ellipsoid_r_axis_major", "ellipsoid_r_axis_medium", "ellipsoid_r_axis_minor"]
+RAW_VOXEL_COUNT_COLUMNS = ["area", "area_convex"]  # redundant with volume_um + solidity once corrected
+
 # Columns that are identifiers / acquisition metadata, not morphology features.
-# Excluded from the model input matrix. `magnification`/`spacing_*_um` are dropped
-# because the one 25x batch (20241023) is P021N-only, i.e. it would leak class
-# identity through acquisition settings rather than real morphology.
+# Excluded from the model input matrix.
 NON_FEATURE_COLUMNS = [
     "label",
     "img_name",
@@ -35,7 +48,7 @@ NON_FEATURE_COLUMNS = [
     "spacing_x_um",
     "spacing_y_um",
     "spacing_z_um",
-]
+] + RAW_AXIS_COLUMNS + RAW_VOXEL_COUNT_COLUMNS
 
 
 def load_and_filter(csv_path: str, exclude_25x: bool = False) -> pd.DataFrame:
@@ -44,18 +57,25 @@ def load_and_filter(csv_path: str, exclude_25x: bool = False) -> pd.DataFrame:
     Derives a binary label `is_tumor` (0 = P021N healthy, 1 = P013T tumor) from
     `img_name`.
 
-    `exclude_25x`: the batch `20241023` (P021N/healthy only) was imaged at 25x
-    while every other batch is 40x. Imaging date is a perfect proxy for class
-    label (each date belongs to exactly one class), and this magnification
-    outlier is a confirmed learnable non-biological shortcut (grouped-CV date
-    classifier reaches 91-96% accuracy vs. 50% chance within the healthy class
-    alone). Set True to drop it and get an apples-to-apples magnification
-    comparison between classes.
+    Also corrects `ellipsoid_r_axis_major/medium/minor` from raw voxels to microns
+    (new `*_um` columns; used by `get_feature_matrix` in place of the raw ones —
+    see RAW_AXIS_COLUMNS above for why).
+
+    `exclude_25x`: NOT recommended by default — kept only for reproducing the
+    earlier (mistaken) analysis. The 25x batch (20241023, P021N-only) was
+    originally suspected as a non-biological confound because raw-voxel axis
+    columns differed ~17% between magnifications, but that was a units bug in
+    this loader, not a real effect: ground-truth manual nuclei diameters differ
+    <1% between magnifications, and a batch classifier using only correctly-scaled
+    features performs at chance (~50%), not the earlier reported 91-96%.
     """
     df = pd.read_csv(csv_path)
 
     if exclude_25x:
         df = df[df["magnification"] != "25x"]
+
+    for col in RAW_AXIS_COLUMNS:
+        df[f"{col}_um"] = df[col] * df["spacing_x_um"]
 
     df = df[~df["img_name"].isin(BAD_IMAGES)]
 
