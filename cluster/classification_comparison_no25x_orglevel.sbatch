@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=02:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/%j_classif_no25x_org.log
 #SBATCH --error=logs/%j_classif_no25x_org.log
 
@@ -24,7 +24,7 @@ echo "---"
 python run_classification_comparison.py \
     --models tabpfn tabfm autogluon \
     --exclude-25x --aggregate-organoid \
-    --output-suffix _no25x_orglevel
+    --output-suffix _no25x
 
 echo "---"
 echo "End: $(date)"

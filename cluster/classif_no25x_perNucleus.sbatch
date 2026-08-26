@@ -24,7 +24,7 @@ echo "---"
 python run_classification_comparison.py \
     --models tabpfn tabfm autogluon \
     --exclude-25x \
-    --output-suffix _no25x_perNucleus
+    --output-suffix _no25x
 
 echo "---"
 echo "End: $(date)"
