@@ -4,6 +4,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/%j_classification_comparison.log
 #SBATCH --error=logs/%j_classification_comparison.log
 
@@ -20,7 +21,7 @@ echo "GPUs:   $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null)"
 echo "Start:  $(date)"
 echo "---"
 
-python run_classification_comparison.py
+python run_classification_comparison.py --models autogluon
 
 echo "---"
 echo "End: $(date)"
