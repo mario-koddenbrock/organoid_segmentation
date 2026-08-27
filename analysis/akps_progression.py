@@ -4,6 +4,18 @@ progression series (NCO -> A -> AK -> AKP -> AKPS) to test whether the learned
 
 Trains on three different feature sources for comparison: manual (ground-truth)
 segmentation, auto (CellposeSAM) segmentation, and the two pooled together.
+
+`neighborhood_density` and `nuc_count_per_organoid` are excluded from FEATURE_COLS
+(per Joshua): neither is an intrinsic property of a single nucleus, mitotic cells
+are often missed by segmentation (biasing density estimates), and nuc_count is
+itself confounded with tumor status (cancer organoids carry more nuclei). For the
+AKPS series specifically, Joshua additionally found several *other* features
+correlate with nuc_count_per_organoid within that line (larger/more proliferative
+organoids -> systematically different nucleus morphology), which would otherwise
+leak organoid-size information into organoid-level feature means. `load_akps`
+removes this by stratified subsampling: nuclei are subsampled down to an equal
+count per organoid (see `stratified_subsample_by_organoid`), so every organoid
+contributes the same number of samples to any per-nucleus average.
 """
 
 import numpy as np
@@ -17,10 +29,40 @@ FEATURE_COLS = [
     "ellipsoid_axis_major_um", "ellipsoid_axis_medium_um", "ellipsoid_axis_minor_um",
     "aspect_ratio_minor_per_medium", "aspect_ratio_medium_per_major", "aspect_ratio_minor_per_major",
     "prolate_ratio", "oblate_ratio", "relative_z_position", "distance_to_organoid_center_um",
-    "neighborhood_density", "nuc_count_per_organoid",
 ]
 
 MODEL_FACTORIES = {"logreg": logreg_baseline, "l0l2_logreg": l0l2_logreg_model}
+
+MIN_NUCLEI_PER_ORGANOID = 10  # matches analysis/data.py's Joshi-derived threshold
+
+
+def stratified_subsample_by_organoid(df: pd.DataFrame, group_col: str = "organoid",
+                                      min_n: int = MIN_NUCLEI_PER_ORGANOID,
+                                      target_n: int | None = None,
+                                      random_state: int = 0) -> pd.DataFrame:
+    """Equalize the number of nuclei contributed per organoid.
+
+    Drops organoids with fewer than `min_n` nuclei, then randomly subsamples
+    (without replacement) every remaining organoid down to `target_n` nuclei
+    (default: the smallest organoid remaining after the `min_n` filter). This
+    makes nuc_count_per_organoid constant across the dataset, so it structurally
+    cannot correlate with -- and bias -- any other per-nucleus-averaged feature.
+    """
+    counts = df.groupby(group_col).size()
+    keep_organoids = counts[counts >= min_n].index
+    df = df[df[group_col].isin(keep_organoids)]
+    if target_n is None:
+        target_n = int(df.groupby(group_col).size().min())
+
+    rng = np.random.RandomState(random_state)
+    parts = []
+    for _, sub in df.groupby(group_col):
+        if len(sub) > target_n:
+            idx = rng.choice(sub.index.to_numpy(), size=target_n, replace=False)
+            parts.append(sub.loc[idx])
+        else:
+            parts.append(sub)
+    return pd.concat(parts).sort_index().reset_index(drop=True)
 
 # Biological ordering of the progression series.
 LINE_ORDER = ["NCO", "A", "AK", "AKP", "AKPS"]
@@ -50,7 +92,7 @@ def load_auto(path="data/manual_vs_auto/auto_trial005_FULL_features.csv"):
 def load_akps(path="data/manual_vs_auto/akps_features.csv"):
     df = pd.read_csv(path)
     df["organoid"] = df["img_name"]
-    return df
+    return stratified_subsample_by_organoid(df)
 
 
 def _aggregate_organoid(df: pd.DataFrame, extra_cols=()) -> pd.DataFrame:

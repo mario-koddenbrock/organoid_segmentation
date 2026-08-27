@@ -21,8 +21,10 @@ FEATURE_COLS = [
     "ellipsoid_axis_major_um", "ellipsoid_axis_medium_um", "ellipsoid_axis_minor_um",
     "aspect_ratio_minor_per_medium", "aspect_ratio_medium_per_major", "aspect_ratio_minor_per_major",
     "prolate_ratio", "oblate_ratio", "relative_z_position", "distance_to_organoid_center_um",
-    "neighborhood_density", "nuc_count_per_organoid",
 ]
+# neighborhood_density and nuc_count_per_organoid are excluded (per Joshua): neither
+# is intrinsic to a single nucleus, and nuc_count is itself confounded with tumor
+# status -- see analysis/akps_progression.py's module docstring for details.
 
 MODEL_FACTORIES = {"logreg": logreg_baseline, "l0l2_logreg": l0l2_logreg_model}
 

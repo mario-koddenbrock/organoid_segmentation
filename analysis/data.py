@@ -35,6 +35,14 @@ SPHERICITY_SOLIDITY_THRESHOLD = 0.65
 RAW_AXIS_COLUMNS = ["ellipsoid_r_axis_major", "ellipsoid_r_axis_medium", "ellipsoid_r_axis_minor"]
 RAW_VOXEL_COUNT_COLUMNS = ["area", "area_convex"]  # redundant with volume_um + solidity once corrected
 
+# Excluded per Joshua's own feature-selection: neither is intrinsic to a single
+# nucleus (neighborhood_density misses mitotic cells; nuc_count_per_organoid is
+# itself confounded with tumor status -- cancer organoids carry more nuclei). See
+# analysis/akps_progression.py's module docstring for the fuller rationale.
+# `count` is an exact duplicate of `nuc_count_per_organoid` (verified: corr==1.0,
+# identical per-organoid values) -- same column under two names in Joshi's CSV.
+NON_INTRINSIC_COLUMNS = ["neighborhood_density", "nuc_count_per_organoid", "count"]
+
 # Columns that are identifiers / acquisition metadata, not morphology features.
 # Excluded from the model input matrix.
 NON_FEATURE_COLUMNS = [
@@ -48,7 +56,7 @@ NON_FEATURE_COLUMNS = [
     "spacing_x_um",
     "spacing_y_um",
     "spacing_z_um",
-] + RAW_AXIS_COLUMNS + RAW_VOXEL_COUNT_COLUMNS
+] + RAW_AXIS_COLUMNS + RAW_VOXEL_COUNT_COLUMNS + NON_INTRINSIC_COLUMNS
 
 
 def load_and_filter(csv_path: str, exclude_25x: bool = False) -> pd.DataFrame:
