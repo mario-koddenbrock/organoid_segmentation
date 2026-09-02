@@ -29,7 +29,7 @@ classification analysis.
 4. Run `run_classification_comparison.py` and
    `run_pure_nucleus_notebook_experiments.py` from the repository root.
 
-The two notebooks are historical exploration, not executable sources of truth:
-they contain old table paths, old feature names, and organoid aggregation. Port a
-notebook cell to the canonical modules before reusing it; do not run the notebooks
-unchanged for final results.
+The two notebooks are maintained executable narratives built on the canonical
+modules. Keep them synchronized with the scripts and preserve their explicit
+scaling audits and sensitivity analyses. Do not reintroduce old table paths,
+legacy feature names, or organoid aggregation.

@@ -35,7 +35,7 @@ organoid_segmentation/
 ├── configs/                    # Model hyperparameter configurations (JSON)
 ├── cluster/                    # SLURM job scripts for HPC
 ├── analysis/                   # Nucleus-level classification modules
-├── notebooks/                  # Historical exploratory notebooks
+├── notebooks/                  # Maintained executable analysis notebooks
 ├── docs/NUCLEUS_FEATURE_PIPELINE.md # Feature/scaling decision record
 ├── recompute_features_from_cluster_masks.py # CPU feature extraction
 ├── run_classification_comparison.py         # Model comparison
@@ -90,8 +90,8 @@ The maintained analyses use only intrinsic, physically scaled nucleus features
 and produce one prediction per nucleus. Organoid IDs are used only to prevent CV
 leakage; no features or predictions are aggregated. See
 [the feature pipeline documentation](docs/NUCLEUS_FEATURE_PIPELINE.md) before
-running these experiments. The notebooks are historical and must not be executed
-unchanged for final results.
+running these experiments. The maintained notebooks expose scaling audits and
+sensitivity analyses alongside the predictions.
 
 ### Single Organoid Segmentation
 

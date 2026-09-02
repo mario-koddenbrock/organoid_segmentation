@@ -15,10 +15,10 @@ The current contract is:
 - an organoid/image ID is used only to keep all its nuclei in one CV fold.
 
 The notebooks `notebooks/classification_investigation.ipynb` and
-`notebooks/akps_progression.ipynb` document earlier exploration. Their paths,
-feature names, and aggregation cells are stale. The maintained reproductions are
-`run_classification_comparison.py` and
-`run_pure_nucleus_notebook_experiments.py`.
+`notebooks/akps_progression.ipynb` are maintained executable analyses using the
+same canonical modules as `run_classification_comparison.py` and
+`run_pure_nucleus_notebook_experiments.py`. They expose acquisition-scaling,
+25×-objective, and imputed-NCO sensitivity checks.
 
 ## Canonical features
 
@@ -146,3 +146,9 @@ python run_pure_nucleus_notebook_experiments.py
 
 Results produced before this physical-spacing recomputation are scientifically
 stale and must not be reported. New outputs go to `results/classification/`.
+
+For a standalone integrity check and physical-feature plausibility plot, run:
+
+```bash
+python -m analysis.validate_recomputed_features
+```
