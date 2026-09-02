@@ -1,11 +1,9 @@
-"""Loading and filtering of per-nucleus morphology feature CSVs.
+"""Load physically scaled, per-nucleus morphology features."""
 
-Filters follow the criteria supplied by Joshi (co-author) so that results here are
-directly comparable to his logistic-regression baseline.
-"""
-
-import numpy as np
+import re
 import pandas as pd
+
+from analysis.features import PURE_NUCLEUS_FEATURES
 
 # Images excluded outright by Joshi (visually inspected bad segmentations).
 BAD_IMAGES = [
@@ -20,20 +18,8 @@ MIN_NUCLEI_PER_IMAGE = 10
 MIN_VOLUME_UM3 = 165.77
 SPHERICITY_SOLIDITY_THRESHOLD = 0.65
 
-# `ellipsoid_r_axis_major/medium/minor` and `area`/`area_convex` are stored as RAW
-# VOXEL values (no `_um` suffix), unlike `volume_um`/`surface_area_um`/
-# `distance_to_organoid_center_um` which are already correctly converted to physical
-# units (verified: `area * spacing_x_um * spacing_y_um * spacing_z_um == volume_um`
-# exactly). Comparing the raw axis columns directly across the 25x (20241023) and
-# 40x batches — which have different spacing_x_um (0.26 vs 0.324) — is comparing
-# different physical scales as if they were the same value. This produced a false
-# "+17%"/"91-96% batch-predictable" signal; ground-truth manual nuclei diameters
-# (see notebooks/classification_investigation.ipynb) show <1% real difference
-# between magnifications once correctly converted. RAW_AXIS_COLUMNS are corrected
-# to microns in `load_and_filter` (see `*_um` columns added there) and the raw
-# versions are excluded from the model feature matrix.
 RAW_AXIS_COLUMNS = ["ellipsoid_r_axis_major", "ellipsoid_r_axis_medium", "ellipsoid_r_axis_minor"]
-RAW_VOXEL_COUNT_COLUMNS = ["area", "area_convex"]  # redundant with volume_um + solidity once corrected
+RAW_VOXEL_COUNT_COLUMNS = ["area", "area_convex"]
 
 # Excluded per Joshua's own feature-selection: neither is intrinsic to a single
 # nucleus (neighborhood_density misses mitotic cells; nuc_count_per_organoid is
@@ -60,37 +46,39 @@ NON_FEATURE_COLUMNS = [
 
 
 def load_and_filter(csv_path: str, exclude_25x: bool = False) -> pd.DataFrame:
-    """Load one trial's nucleus morphology CSV and apply Joshi's filters.
-
-    Derives a binary label `is_tumor` (0 = P021N healthy, 1 = P013T tumor) from
-    `img_name`.
-
-    Also corrects `ellipsoid_r_axis_major/medium/minor` from raw voxels to microns
-    (new `*_um` columns; used by `get_feature_matrix` in place of the raw ones —
-    see RAW_AXIS_COLUMNS above for why).
-
-    `exclude_25x`: NOT recommended by default — kept only for reproducing the
-    earlier (mistaken) analysis. The 25x batch (20241023, P021N-only) was
-    originally suspected as a non-biological confound because raw-voxel axis
-    columns differed ~17% between magnifications, but that was a units bug in
-    this loader, not a real effect: ground-truth manual nuclei diameters differ
-    <1% between magnifications, and a batch classifier using only correctly-scaled
-    features performs at chance (~50%), not the earlier reported 91-96%.
-    """
+    """Load one trial, normalize legacy names, and apply morphology filters."""
     df = pd.read_csv(csv_path)
 
     if exclude_25x:
-        df = df[df["magnification"] != "25x"]
+        objective = df["objective"] if "objective" in df else df["magnification"]
+        df = df[objective != "25x"]
+
+    # Compatibility for old tables. New analyses must use the recomputed tables,
+    # whose unit-bearing names are already present.
+    if "volume_um3" not in df and "volume_um" in df:
+        df["volume_um3"] = df["volume_um"]
+    if "surface_area_um2" not in df and "surface_area_um" in df:
+        df["surface_area_um2"] = df["surface_area_um"]
 
     for col in RAW_AXIS_COLUMNS:
-        df[f"{col}_um"] = df[col] * df["spacing_x_um"]
+        # Normalise the main CSV's ``ellipsoid_r_axis_*`` naming to the
+        # canonical names emitted by the shared mask feature extractor.
+        if col in df:
+            canonical = col.replace("ellipsoid_r_axis_", "ellipsoid_axis_") + "_um"
+            df[canonical] = df[col] * df["spacing_x_um"]
 
-    df = df[~df["img_name"].isin(BAD_IMAGES)]
+    def canonical_image_id(name):
+        match = re.match(r"(\d{8})_(P021N|P013T).*?_([ABC])_?(\d{3}[a-z]?)$", str(name))
+        return f"{match.group(1)}_{match.group(2)}_{match.group(3)}{match.group(4)}" if match else name
+
+    df = df[~df["img_name"].map(canonical_image_id).isin(BAD_IMAGES)]
+    if "organoid" not in df:
+        df["organoid"] = df["img_name"]
 
     counts_per_image = df.groupby("img_name")["img_name"].transform("count")
     df = df[counts_per_image >= MIN_NUCLEI_PER_IMAGE]
 
-    df = df[df["volume_um"] >= MIN_VOLUME_UM3]
+    df = df[df["volume_um3"] >= MIN_VOLUME_UM3]
 
     bad_shape = (df["sphericity"] < SPHERICITY_SOLIDITY_THRESHOLD) & (
         df["solidity"] < SPHERICITY_SOLIDITY_THRESHOLD
@@ -113,11 +101,13 @@ def get_feature_matrix(df: pd.DataFrame):
     Nuclei from the same organoid are correlated (same tissue, same imaging session),
     so CV folds MUST be grouped by `organoid` to avoid train/test leakage.
     """
-    feature_cols = [
-        c
-        for c in df.columns
-        if c not in NON_FEATURE_COLUMNS and c != "is_tumor"
-    ]
+    # Deliberately whitelist intrinsic single-nucleus measurements.  Inferring
+    # features as "all numeric columns" previously admitted organoid-context
+    # measurements such as relative position and distance to organoid centre.
+    feature_cols = PURE_NUCLEUS_FEATURES
+    missing = [c for c in feature_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing pure nucleus feature columns: {missing}")
     X = df[feature_cols].apply(pd.to_numeric, errors="coerce")
     if X.isna().any().any():
         raise ValueError(
@@ -127,32 +117,3 @@ def get_feature_matrix(df: pd.DataFrame):
     y = df["is_tumor"].to_numpy()
     groups = df["organoid"].to_numpy()
     return X, y, groups
-
-
-def aggregate_to_organoid_level(df: pd.DataFrame) -> pd.DataFrame:
-    """Collapse per-nucleus rows to one row per organoid (mean of numeric
-    features), fixing the pseudoreplication of treating ~30 correlated nuclei
-    from the same organoid as independent samples. Also removes within-organoid
-    noise, at the cost of shrinking the dataset to ~55 rows total.
-    """
-    feature_cols = [
-        c
-        for c in df.columns
-        if c not in NON_FEATURE_COLUMNS and c != "is_tumor" and c != "organoid"
-    ]
-    numeric = df[feature_cols].apply(pd.to_numeric, errors="coerce")
-    agg = numeric.groupby(df["organoid"]).mean()
-    agg["is_tumor"] = df.groupby("organoid")["is_tumor"].first()
-    agg["n_nuclei"] = df.groupby("organoid").size()
-    return agg.reset_index()
-
-
-def get_organoid_feature_matrix(agg_df: pd.DataFrame):
-    """Feature matrix for an organoid-level dataframe (one row = one organoid,
-    so plain StratifiedKFold is valid — no grouping needed)."""
-    feature_cols = [
-        c for c in agg_df.columns if c not in ("organoid", "is_tumor", "n_nuclei")
-    ]
-    X = agg_df[feature_cols]
-    y = agg_df["is_tumor"].to_numpy()
-    return X, y

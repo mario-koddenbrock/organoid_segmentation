@@ -18,19 +18,20 @@ import pandas as pd
 import fastsparsegams as fsg
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import confusion_matrix, accuracy_score
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.preprocessing import StandardScaler
 from scipy.stats import spearmanr, pearsonr
 
-from analysis.akps_progression import LINE_ORDER, FEATURE_COLS, _aggregate_organoid
+from analysis.akps_progression import LINE_ORDER, FEATURE_COLS
 
 STAGE_IDX = {line: i for i, line in enumerate(LINE_ORDER)}
 
 
-def prep_organoid_level(akps_df: pd.DataFrame) -> pd.DataFrame:
-    agg = _aggregate_organoid(akps_df, extra_cols=["line"])
-    agg["stage_idx"] = agg["line"].map(STAGE_IDX)
-    return agg
+def prep_nucleus_level(akps_df: pd.DataFrame) -> pd.DataFrame:
+    """Attach the ordinal target without aggregating nucleus rows."""
+    out = akps_df.copy()
+    out["stage_idx"] = out["line"].map(STAGE_IDX)
+    return out
 
 
 class SparseOrdinalRegressor:
@@ -79,20 +80,20 @@ class SparseOrdinalRegressor:
         return {f: c for f, c in zip(feature_names, coeffs[1:]) if abs(c) > 1e-10}
 
 
-def cv_evaluate(agg_df: pd.DataFrame, n_folds=5, random_state=0):
-    """Grouped-by-nothing (organoid = row already) stratified CV for both the
-    sparse ordinal regressor and the multinomial classifier. Returns per-fold
-    metrics and out-of-fold predictions."""
-    X = agg_df[FEATURE_COLS].apply(pd.to_numeric, errors="coerce")
-    y_stage = agg_df["stage_idx"].to_numpy()
-    y_line = agg_df["line"].to_numpy()
+def cv_evaluate(nuclei_df: pd.DataFrame, n_folds=5, random_state=0):
+    """Nucleus-level CV, grouped by organoid to prevent biological leakage."""
+    X = nuclei_df[FEATURE_COLS].apply(pd.to_numeric, errors="coerce")
+    y_stage = nuclei_df["stage_idx"].to_numpy()
+    y_line = nuclei_df["line"].to_numpy()
+    groups = nuclei_df["organoid"].to_numpy()
 
-    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=random_state)
-    oof_reg_pred = np.full(len(agg_df), np.nan)
-    oof_clf_pred = np.full(len(agg_df), "", dtype=object)
+    skf = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=random_state)
+    oof_reg_pred = np.full(len(nuclei_df), np.nan)
+    oof_clf_pred = np.full(len(nuclei_df), "", dtype=object)
     fold_rows = []
 
-    for fold, (train_idx, test_idx) in enumerate(skf.split(X, y_stage)):
+    for fold, (train_idx, test_idx) in enumerate(skf.split(X, y_stage, groups)):
+        assert set(groups[train_idx]).isdisjoint(set(groups[test_idx]))
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train_stage, y_test_stage = y_stage[train_idx], y_stage[test_idx]
         y_train_line, y_test_line = y_line[train_idx], y_line[test_idx]
@@ -117,17 +118,17 @@ def cv_evaluate(agg_df: pd.DataFrame, n_folds=5, random_state=0):
             "clf_accuracy": acc, "n_selected_features": reg.n_features_selected,
         })
 
-    agg_df = agg_df.copy()
-    agg_df["oof_pred_stage"] = oof_reg_pred
-    agg_df["oof_pred_line"] = oof_clf_pred
-    return pd.DataFrame(fold_rows), agg_df
+    nuclei_df = nuclei_df.copy()
+    nuclei_df["oof_pred_stage"] = oof_reg_pred
+    nuclei_df["oof_pred_line"] = oof_clf_pred
+    return pd.DataFrame(fold_rows), nuclei_df
 
 
-def fit_full_and_select(agg_df: pd.DataFrame):
+def fit_full_and_select(nuclei_df: pd.DataFrame):
     """Refit the sparse ordinal regressor on ALL AKPS organoids for the final
     feature-selection story (not for held-out evaluation -- see cv_evaluate)."""
-    X = agg_df[FEATURE_COLS].apply(pd.to_numeric, errors="coerce")
-    y = agg_df["stage_idx"].to_numpy()
+    X = nuclei_df[FEATURE_COLS].apply(pd.to_numeric, errors="coerce")
+    y = nuclei_df["stage_idx"].to_numpy()
     reg = SparseOrdinalRegressor(max_support_size=5)
     reg.fit(X, y)
     return reg, reg.selected_features(FEATURE_COLS)

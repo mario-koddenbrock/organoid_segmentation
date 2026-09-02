@@ -1,23 +1,16 @@
-"""Compare logistic regression, TabPFN, TabFM and AutoGluon on the tumor-vs-healthy
-nucleus classification task, on both trial005 and trial028 segmentation datasets.
+"""Compare models on the tumor-vs-healthy nucleus classification task.
 
 Grouped 5-fold CV (grouped by organoid) so nuclei from the same organoid never
 appear in both train and test.
 
-Every run scores ALL applicable evaluation levels from a single set of model fits
-(training is identical regardless of how predictions are later aggregated, so we
-don't waste GPU time re-training just to re-score):
-  - without --aggregate-organoid: both 'nucleus' (raw per-nucleus AUC) and
-    'organoid_pred_agg' (predicted probabilities meaned per organoid before scoring)
-  - with --aggregate-organoid: 'organoid_data_agg' only (features meaned per
-    organoid before training, so there's nothing left to aggregate post-hoc)
-Each eval level writes its own comparison_*_{perNucleus,predAgg,orglevel}.csv/plot.
+Only intrinsic nucleus features are used and every prediction/metric is at nucleus
+level. Organoid IDs are used solely to keep correlated nuclei in the same CV fold.
 
 Usage:
     python run_classification_comparison.py
     python run_classification_comparison.py --models logreg tabpfn
     python run_classification_comparison.py --trials 005
-    python run_classification_comparison.py --exclude-25x --aggregate-organoid
+    python run_classification_comparison.py --exclude-25x
 
 To parallelize across separate SLURM jobs (one fold+trial per job/GPU), run a
 single fold and merge afterwards:
@@ -33,18 +26,16 @@ import traceback
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import GroupKFold, StratifiedKFold
+from sklearn.model_selection import GroupKFold
 from sklearn.metrics import roc_auc_score, accuracy_score
 
 from analysis.data import (
     load_and_filter,
     get_feature_matrix,
-    aggregate_to_organoid_level,
-    get_organoid_feature_matrix,
 )
 from analysis.models import MODEL_FACTORIES
 
-DATA_DIR = "data/Nuclei_morpho_data_trial005_trial028"
+DATA_DIR = "data/recomputed_pure_nucleus_features"
 OUT_DIR = "results/classification"
 FOLD_OUT_DIR = os.path.join(OUT_DIR, "folds")
 N_FOLDS = 5
@@ -52,8 +43,6 @@ RANDOM_STATE = 0
 
 EVAL_LEVEL_SUFFIX = {
     "nucleus": "perNucleus",
-    "organoid_pred_agg": "predAgg",
-    "organoid_data_agg": "orglevel",
 }
 
 
@@ -63,14 +52,9 @@ def run_cv(model_name, X, y, groups, n_folds=N_FOLDS, only_fold=None):
     identical regardless of how predictions are later aggregated, so scoring
     multiple ways from the same fit avoids wasted duplicate training runs).
 
-    If `groups` is None, X/y are already organoid-level (one row per organoid,
-    i.e. features were aggregated before training) so plain StratifiedKFold is
-    used and the only eval level is 'organoid_data_agg'. Otherwise GroupKFold on
-    `groups` (nucleus-level data, grouped by organoid to prevent leakage) and
-    two eval levels are scored per fold: 'nucleus' (raw per-nucleus AUC) and
-    'organoid_pred_agg' (predicted probabilities meaned per organoid before
-    scoring — contrasted with aggregating the *features* before training, see
-    `aggregate_to_organoid_level` in analysis/data.py).
+    GroupKFold uses `groups` solely to keep
+    nuclei from the same organoid out of both train and test folds; predictions
+    and metrics are never aggregated.
 
     If `only_fold` is given, fit/evaluate only that one fold (used to
     parallelize folds across separate SLURM jobs).
@@ -78,22 +62,18 @@ def run_cv(model_name, X, y, groups, n_folds=N_FOLDS, only_fold=None):
     Returns {eval_level: (aucs, accs)}.
     """
     if groups is None:
-        cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=RANDOM_STATE)
-        splits = cv.split(X, y)
-        eval_levels = ["organoid_data_agg"]
-    else:
-        cv = GroupKFold(n_splits=n_folds)
-        splits = cv.split(X, y, groups)
-        eval_levels = ["nucleus", "organoid_pred_agg"]
+        raise ValueError("Organoid-level data are forbidden; provide per-nucleus groups")
+    cv = GroupKFold(n_splits=n_folds)
+    splits = cv.split(X, y, groups)
+    eval_levels = ["nucleus"]
 
     results = {lvl: ([], []) for lvl in eval_levels}
     for fold, (train_idx, test_idx) in enumerate(splits):
         if only_fold is not None and fold != only_fold:
             continue
-        if groups is not None:
-            assert set(groups[train_idx]).isdisjoint(set(groups[test_idx])), (
-                "group leakage between train and test fold"
-            )
+        assert set(groups[train_idx]).isdisjoint(set(groups[test_idx])), (
+            "group leakage between train and test fold"
+        )
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
 
@@ -103,20 +83,7 @@ def run_cv(model_name, X, y, groups, n_folds=N_FOLDS, only_fold=None):
         proba_pos = proba[:, 1] if proba.ndim == 2 else proba
 
         fold_metrics = {}
-        if groups is None:
-            fold_metrics["organoid_data_agg"] = (y_test, proba_pos)
-        else:
-            fold_metrics["nucleus"] = (y_test, proba_pos)
-            test_groups = groups[test_idx]
-            pred_df = pd.DataFrame({
-                "organoid": test_groups, "proba": proba_pos, "y_true": y_test,
-            })
-            per_organoid = pred_df.groupby("organoid").agg(
-                proba=("proba", "mean"), y_true=("y_true", "first")
-            )
-            fold_metrics["organoid_pred_agg"] = (
-                per_organoid["y_true"].to_numpy(), per_organoid["proba"].to_numpy()
-            )
+        fold_metrics["nucleus"] = (y_test, proba_pos)
 
         msg = f"    fold {fold} (n_train={len(train_idx)}, n_test={len(test_idx)}):"
         for lvl, (eval_y, eval_proba) in fold_metrics.items():
@@ -130,28 +97,21 @@ def run_cv(model_name, X, y, groups, n_folds=N_FOLDS, only_fold=None):
     return {lvl: (np.array(a), np.array(c)) for lvl, (a, c) in results.items()}
 
 
-def load_data(trial, exclude_25x=False, aggregate_organoid=False):
-    """Load one trial's data, applying Joshi's filters plus the optional
-    25x-magnification exclusion and organoid-level aggregation."""
-    csv_path = os.path.join(DATA_DIR, f"morphology_features_nuclei_{trial}.csv")
+def load_data(trial, exclude_25x=False):
+    """Load one recomputed trial table and return nucleus rows."""
+    csv_path = os.path.join(DATA_DIR, f"trial_{trial}_p021n_p013t.csv")
     df = load_and_filter(csv_path, exclude_25x=exclude_25x)
-    if aggregate_organoid:
-        agg = aggregate_to_organoid_level(df)
-        X, y = get_organoid_feature_matrix(agg)
-        groups = None
-        n_units = len(agg)
-    else:
-        X, y, groups = get_feature_matrix(df)
-        n_units = len(set(groups))
+    X, y, groups = get_feature_matrix(df)
+    n_units = len(set(groups))
     return X, y, groups, len(df), n_units
 
 
-def run_single_fold(trial, model_name, fold, exclude_25x=False, aggregate_organoid=False):
+def run_single_fold(trial, model_name, fold, exclude_25x=False):
     """Run one (trial, model, fold) combination and write its own result CSV
     (one row per eval level scored from that single fit — see `run_cv`).
     Meant to be invoked as one task of a SLURM job array."""
     os.makedirs(FOLD_OUT_DIR, exist_ok=True)
-    X, y, groups, n_rows, n_units = load_data(trial, exclude_25x, aggregate_organoid)
+    X, y, groups, n_rows, n_units = load_data(trial, exclude_25x)
     print(f"=== trial {trial} model {model_name} fold {fold} "
           f"(n_rows={n_rows} n_units={n_units}) ===")
 
@@ -226,9 +186,6 @@ def main():
     parser.add_argument("--exclude-25x", action="store_true",
                          help="Drop the 25x-magnification batch (20241023, P021N-only), "
                               "a confirmed non-biological confound with the class label")
-    parser.add_argument("--aggregate-organoid", action="store_true",
-                         help="Collapse to one row per organoid (mean features) instead "
-                              "of per-nucleus rows, fixing pseudoreplication")
     parser.add_argument("--output-suffix", default="",
                          help="Prefix tag for output filenames, e.g. '_no25x'. The "
                               "eval-level name (perNucleus/predAgg/orglevel) is "
@@ -244,18 +201,15 @@ def main():
             "--fold requires exactly one --trials value and one --models value"
         )
         run_single_fold(args.trials[0], args.models[0], args.fold,
-                         args.exclude_25x, args.aggregate_organoid)
+                         args.exclude_25x)
         return
 
     os.makedirs(OUT_DIR, exist_ok=True)
     rows = []
 
     for trial in args.trials:
-        print(f"\n=== trial {trial} (exclude_25x={args.exclude_25x}, "
-              f"aggregate_organoid={args.aggregate_organoid}) ===")
-        X, y, groups, n_rows, n_units = load_data(
-            trial, args.exclude_25x, args.aggregate_organoid
-        )
+        print(f"\n=== trial {trial} (exclude_25x={args.exclude_25x}) ===")
+        X, y, groups, n_rows, n_units = load_data(trial, args.exclude_25x)
         print(f"n_rows={n_rows} n_units={n_units} "
               f"n_features={X.shape[1]} tumor_frac={y.mean():.3f}")
 
@@ -270,8 +224,7 @@ def main():
                 print(f"    FAILED: {exc}")
                 traceback.print_exc()
                 cv_results = {lvl: (np.array([np.nan]), np.array([np.nan]))
-                               for lvl in (["organoid_data_agg"] if args.aggregate_organoid
-                                           else ["nucleus", "organoid_pred_agg"])}
+                               for lvl in ["nucleus"]}
                 status_per_level = {lvl: "failed" for lvl in cv_results}
                 err = str(exc)
             elapsed = time.time() - t0

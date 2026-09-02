@@ -11,6 +11,8 @@ This project provides tools to:
 - **Finetune CellposeSAM** on custom organoid data with train/test evaluation and learning curve visualization
 - **Evaluate segmentation** quality with F1 score, Jaccard index, and Average Precision at multiple IoU thresholds
 - **Batch process** all organoids and export metrics to CSV
+- **Recompute physically scaled, intrinsic nucleus morphology features** and run
+  leak-free nucleus-level classification experiments
 
 ## Project Structure
 
@@ -32,6 +34,12 @@ organoid_segmentation/
 │   └── video_io.py             # MP4 video export from image volumes
 ├── configs/                    # Model hyperparameter configurations (JSON)
 ├── cluster/                    # SLURM job scripts for HPC
+├── analysis/                   # Nucleus-level classification modules
+├── notebooks/                  # Historical exploratory notebooks
+├── docs/NUCLEUS_FEATURE_PIPELINE.md # Feature/scaling decision record
+├── recompute_features_from_cluster_masks.py # CPU feature extraction
+├── run_classification_comparison.py         # Model comparison
+├── run_pure_nucleus_notebook_experiments.py # Maintained notebook experiments
 │   └── finetune_nuclei.sbatch
 ├── data/Organoids/             # Input data (not tracked in git)
 ├── models/                     # Finetuned model weights
@@ -75,6 +83,15 @@ data/Organoids/
 Images are multichannel 3D stacks where channel 0 is the nuclei channel (Hoechst) and channel 1 is the membrane channel (SiR-Actin).
 
 ## Usage
+
+### Nucleus morphology classification
+
+The maintained analyses use only intrinsic, physically scaled nucleus features
+and produce one prediction per nucleus. Organoid IDs are used only to prevent CV
+leakage; no features or predictions are aggregated. See
+[the feature pipeline documentation](docs/NUCLEUS_FEATURE_PIPELINE.md) before
+running these experiments. The notebooks are historical and must not be executed
+unchanged for final results.
 
 ### Single Organoid Segmentation
 
