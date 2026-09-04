@@ -152,3 +152,31 @@ For a standalone integrity check and physical-feature plausibility plot, run:
 ```bash
 python -m analysis.validate_recomputed_features
 ```
+
+## Reviewed AKPS replacement (2026-09-04)
+
+Joshua supplied `20260904_AKPS_rescaled_cropped_reviewed.zip` after re-rescaling
+and manually reviewing/cropping every progression line, including channel-order
+corrections so nuclei are always channel 0. The archive SHA-256 is:
+
+```text
+2254eb4a5ad09632152a575445f895f52cec52fcdd2840008435abde7794d270
+```
+
+It is stored and extracted without replacing the previous dataset under:
+
+```text
+/scratch/koddenbrock/organoid_segmentation/incoming/20260904_AKPS_reviewed/
+```
+
+The archive contains 226 TIFFs: NCO 51, A 45, AK 46, AKP 40, and AKPS 44.
+Every image reports axes `ZCYX`, two channels, micron units, and effectively
+isotropic `(z, y, x) = (0.324, 0.324, 0.324) µm` spacing. No spacing is imputed.
+The complete audit is produced by `audit_reviewed_akps.py`.
+
+SLURM array `141627` creates versioned Trial 005 and Trial 028 masks under
+`results/reviewed_20260904/predictions`. Dependent job `141628` then creates
+reviewed feature tables under `results/reviewed_20260904/features`. The job files
+are `cluster/predict_reviewed_akps_20260904.sbatch` and
+`cluster/recompute_reviewed_akps_features_20260904.sbatch`. Do not mix these masks
+or tables with the previous AKPS outputs.

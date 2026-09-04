@@ -164,6 +164,23 @@ def manual_pairs(root: Path) -> list[tuple[str, str, str, str]]:
     return pairs
 
 
+def reviewed_akps_pairs(
+    images_dir: Path, predictions_dir: Path
+) -> list[tuple[str, str, str, str]]:
+    """Pair flat reviewed AKPS images with one model's predicted masks."""
+    pairs = []
+    for mask in sorted(predictions_dir.glob("*.tif")):
+        source = images_dir / mask.name
+        match = re.match(r"\d{8}_(NCO|AKPS|AKP|AK|A)_", mask.name)
+        if not match:
+            raise ValueError(f"Cannot infer AKPS line from {mask.name}")
+        if not source.is_file():
+            raise FileNotFoundError(f"Missing reviewed source for {mask}: {source}")
+        line = match.group(1)
+        pairs.append((str(mask), str(source), f"reviewed_20260904/{line}", line))
+    return pairs
+
+
 def extract_set(pairs, output: Path, workers: int):
     if not pairs:
         raise ValueError(f"No masks selected for {output}")
@@ -196,7 +213,28 @@ def main():
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument(
+        "--reviewed-images-dir", type=Path,
+        help="Flat reviewed AKPS TIFF directory; switches to reviewed-data mode.",
+    )
+    parser.add_argument(
+        "--reviewed-predictions-root", type=Path,
+        help="Root containing trial_005 and trial_028 reviewed prediction trees.",
+    )
     args = parser.parse_args()
+    if args.reviewed_images_dir or args.reviewed_predictions_root:
+        if not (args.reviewed_images_dir and args.reviewed_predictions_root):
+            parser.error("Both reviewed-data arguments are required together")
+        for trial in ("trial_005", "trial_028"):
+            predictions = (
+                args.reviewed_predictions_root / trial / "extracted" / "after_september2026"
+            )
+            extract_set(
+                reviewed_akps_pairs(args.reviewed_images_dir, predictions),
+                args.output_dir / f"{trial}_akps_reviewed_20260904.csv",
+                args.workers,
+            )
+        return
     for trial in ("trial_005", "trial_028"):
         extract_set(prediction_pairs(args.root, trial, "p021n_p013t"),
                     args.output_dir / f"{trial}_p021n_p013t.csv", args.workers)

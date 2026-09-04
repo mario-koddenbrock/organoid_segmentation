@@ -1,0 +1,23 @@
+{
+  "description": "Trial 005 prediction on Joshua's reviewed, uniformly rescaled AKPS TIFFs (2026-09-04).",
+  "models": [
+    {
+      "name": "trial_005",
+      "base_model": "cpsam",
+      "freeze_encoder": false,
+      "n_epochs": 50,
+      "learning_rate": 0.001,
+      "weight_decay": 0.001,
+      "selected_for": ["3d_ap_0.90"]
+    }
+  ],
+  "gt_mapping": null,
+  "predict_dirs": [
+    "/scratch/koddenbrock/organoid_segmentation/incoming/20260904_AKPS_reviewed/extracted/after_september2026"
+  ],
+  "output": {
+    "models_dir": "/scratch/koddenbrock/results",
+    "predictions_dir": "/scratch/koddenbrock/organoid_segmentation/results/reviewed_20260904/predictions",
+    "reports_dir": "/scratch/koddenbrock/organoid_segmentation/results/reviewed_20260904/reports/trial_005"
+  }
+}
